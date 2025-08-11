@@ -14,9 +14,7 @@ body {
 #info {
     margin-top: 10px;
 }
-#stats {
-    margin-top: 50px;
-}
+#stats { margin-top: 10px; }
 #wait-spider {
     height: 150px;
     margin-top: 20px;
@@ -26,13 +24,15 @@ body {
     margin: 20px;
     text-align: center;
 }
-#help {
-    float: right;
-    margin-right: 5px;
-}
+#help { float: right; margin-right: 5px; }
 
 .hot-header {
     position: relative;
+    pointer-events: none;
+}
+.hot-header .header-input,
+.hot-header .remove-column {
+    pointer-events: auto;
 }
 
 .remove-column {
@@ -40,8 +40,21 @@ body {
     right: 0;
 }
 
-#hot {
-    overflow: hidden;
+#hot { overflow: visible; }
+
+ /* Wrap long cell content and cap visual width to 500px */
+.handsontable .htCore td, .handsontable .htCore th {
+    white-space: normal;    /* allow wrapping */
+    word-break: break-word; /* break long URLs/words */
+    max-width: 500px;       /* cap cell visual width */
+}
+
+/* Ensure Handsontable resize handle is above overlays */
+.handsontable .manualColumnResizer { z-index: 1000; }
+
+/* Responsive tweaks */
+@media (max-width: 767px) {
+  #help { float: none; display: block; text-align: right; }
 }
 
 #infinateScrollElement {

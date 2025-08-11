@@ -110,7 +110,11 @@ function r(e) {
         console.log("Error: ", e)
     }
 }
-import a from "./js/google-analytics.js";
+// Analytics disabled: provide no-op implementation
+const a = {
+    fireEvent: () => {},
+    firePageViewEvent: () => {}
+};
 var i = {
     id: parseInt(u("tabid")),
     url: u("url")
@@ -296,7 +300,9 @@ function v() {
     new Handsontable($("#hot").get(0),{
         data: e.data,
         colHeaders: g(e.fields),
-        wordWrap: !1,
+        wordWrap: !0,
+        autoColumnSize: { useHeaders: true },
+        autoRowSize: true,
         manualColumnResize: !0,
         width: $(window).width() - 20,
         height: $(window).height() - $("#hot").get(0).getBoundingClientRect().y,
@@ -305,13 +311,16 @@ function v() {
             $(".wtHolder").scrollTop(t),
             $(".wtHolder").scrollLeft(n))
         },
-        modifyColWidth: function(e, t) {
-            if (e > 300)
-                return 300
+        modifyColWidth: function(width, col) {
+            if (width > 500) return 500;
+            return width; // let smaller columns fit content
         },
         afterGetColHeader: function(t, n) {
             if (-1 != t) {
-                $(n).children().length > 1 ? $(".hot-header", n).remove() : $(n).click(function() {
+                $(n).children().length > 1 ? $(".hot-header", n).remove() : $(n).on('click.headerFocus', function(ev) {
+                    // avoid blocking resize: ignore clicks near resizer area (right edge ~8px)
+                    const rect = n.getBoundingClientRect();
+                    if (ev.clientX > rect.right - 8) return; 
                     var e = this;
                     setTimeout(function() {
                         $(".header-input", e).trigger("focus")
@@ -343,8 +352,12 @@ function v() {
                 n.firstChild.style.display = "none"
             }
         },
-        beforeOnCellMouseDown: function(e, t, n) {
-            t.row < 0 && e.stopImmediatePropagation()
+        beforeOnCellMouseDown: function(evt, coords, elem) {
+            // Do not stop propagation on header cells so the resize plugin can capture the drag
+            if (coords.row < 0) {
+                // Allow the column resizer and header interactions to work
+                return;
+            }
         }
     })
 }
@@ -409,6 +422,7 @@ function x(e, t) {
         })),
         $("#wait").hide(),
         $("#content").show(),
+        $("#applyNextSelector").show(),
         p('Download data or locate "Next" to crawl multiple pages', "instructions"),
         s.data = e.data,
         s.pages = 1,
@@ -608,6 +622,7 @@ function I() {
     $("#infinateScroll").click(function(e) {
         s.config.infinateScrollChecked ? (s.config.infinateScrollChecked = !1,
         $("#nextSelectorGroup").show(),
+        $("#applyNextSelector").show(),
         k() ? $("#startScraping").show() : $("#startScraping").hide()) : (s.config.infinateScrollChecked = !0,
         $("#nextSelectorGroup").hide(),
         $("#startScraping").show()),
@@ -744,19 +759,29 @@ $("#nextSelectorInput").on("input", function() {
     }
 }),
 $("#applyNextSelector").click(function() {
-    const t = $("#nextSelectorInput").val().trim();
-    if (!t) {
-        return p("Please enter a CSS selector for the Next button/link.", "inputError");
-    }
-    p("", "inputError");
-    s.nextSelector = t;
-    localStorage.setItem("nextSelector:" + s.hostName, t);
-    $("#startScraping").show();
-    chrome.tabs.sendMessage(i.id, {
-        action: "markNextButton",
-        selector: s.nextSelector
-    }, function(e) {
-        e && e.error ? p(e.error, e.errorId || "error", !0) : $("#startScraping").show();
-    })
-}),
+  const t = $("#nextSelectorInput").val().trim();
+  if (!t) {
+    p('Mark "Next" button or link', "instructions");
+    chrome.tabs.sendMessage(i.id, { action: "getNextButton" }, function(res){
+      if (res && res.selector) {
+        $("#nextSelectorInput").val(res.selector);
+        s.nextSelector = res.selector;
+        localStorage.setItem("nextSelector:" + s.hostName, res.selector);
+        $("#startScraping").show();
+        chrome.tabs.sendMessage(i.id, { action: "markNextButton", selector: s.nextSelector });
+      }
+    });
+    return;
+  }
+  p("", "inputError");
+  s.nextSelector = t;
+  localStorage.setItem("nextSelector:" + s.hostName, t);
+  $("#startScraping").show();
+  chrome.tabs.sendMessage(i.id, {
+    action: "markNextButton",
+    selector: s.nextSelector
+  }, function(e) {
+    e && e.error ? p(e.error, e.errorId || "error", !0) : $("#startScraping").show();
+  })
+})
 $("#startScraping").click(T);

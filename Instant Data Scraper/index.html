@@ -4,10 +4,26 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Instant Data Scraper</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="js/tailwind.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
 </head>
 <body class="bg-gray-100 min-h-screen">
+    <!-- Added loading overlay that shows on page load -->
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="fixed inset-0 bg-white z-[100] flex items-center justify-center">
+        <div class="text-center">
+            <div class="relative">
+                <div class="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
+                <div class="absolute inset-0 w-16 h-16 border-4 border-transparent border-t-blue-400 rounded-full animate-spin mx-auto" style="animation-delay: -0.15s; animation-duration: 1.5s;"></div>
+            </div>
+            <div class="flex items-center justify-center mb-2">
+                <i class="fas fa-cog text-blue-500 mr-2 text-xl"></i>
+                <h2 class="text-xl font-semibold text-gray-900">Instant Data Scraper</h2>
+            </div>
+            <p class="text-gray-600 text-sm">Loading interface...</p>
+        </div>
+    </div>
+
     <!-- Sidebar Overlay -->
     <div id="sidebarOverlay" class="fixed inset-0 bg-black bg-opacity-50 z-40 hidden"></div>
     
@@ -584,6 +600,19 @@
 
     <!-- Enhanced JavaScript with Settings modal functionality -->
     <script>
+        // Hide loading overlay once page is fully loaded
+        window.addEventListener('load', function() {
+            const loadingOverlay = document.getElementById('loadingOverlay');
+            // Add a small delay to ensure smooth transition
+            setTimeout(() => {
+                loadingOverlay.style.opacity = '0';
+                loadingOverlay.style.transition = 'opacity 0.5s ease-out';
+                setTimeout(() => {
+                    loadingOverlay.style.display = 'none';
+                }, 500);
+            }, 800); // Show loading for at least 800ms
+        });
+
         // Get DOM elements
         const menuToggle = document.getElementById('menuToggle');
         const sidebarMenu = document.getElementById('sidebarMenu');

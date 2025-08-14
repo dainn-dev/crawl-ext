@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instant Data Scraper</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Sidebar Overlay -->
+    <div id="sidebarOverlay" class="fixed inset-0 bg-black bg-opacity-50 z-40 hidden"></div>
+    
+    <!-- Settings Modal Overlay -->
+    <div id="settingsOverlay" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden"></div>
+    
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="fixed inset-0 z-50 hidden">
+        <div class="flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                <!-- Settings Header -->
+                <div class="flex items-center p-6 border-b">
+                    <button id="closeSettings" class="mr-4 text-gray-500 hover:text-gray-700">
+                        <i class="fas fa-arrow-left text-xl"></i>
+                    </button>
+                    <div class="flex items-center">
+                        <i class="fas fa-cog mr-2 text-gray-600"></i>
+                        <h2 class="text-xl font-semibold text-gray-900">Settings</h2>
+                    </div>
+                </div>
+                
+                <!-- Settings Content -->
+                <div class="p-6 space-y-8">
+                    <!-- Next Page Selectors Section -->
+                    <div>
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-medium text-gray-900">Next Page Selectors</h3>
+                            <button id="addSelector" class="bg-gray-900 text-white px-4 py-2 rounded-md text-sm hover:bg-gray-800 flex items-center">
+                                <i class="fas fa-plus mr-2"></i>
+                                Add Selector
+                            </button>
+                        </div>
+                        
+                        <div id="selectorsList" class="space-y-3">
+                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <span class="text-blue-600 font-mono text-sm">a.next</span>
+                                <button class="text-gray-400 hover:text-red-500">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <span class="text-blue-600 font-mono text-sm">button[rel='next']</span>
+                                <button class="text-gray-400 hover:text-red-500">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Automation Settings Section -->
+                    <div>
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">Automation Settings</h3>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-700">Auto download CSV when scraping is done</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" class="sr-only peer" id="autoDownloadCSV">
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-700">Auto upload file to Google Drive when done</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" class="sr-only peer" id="autoUploadDrive" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            
+                            <!-- Added ID to Authentication Method section for conditional visibility -->
+                            <div id="authMethodSection" class="mt-6 pl-4 border-l-2 border-gray-200">
+                                <h4 class="text-sm font-medium text-gray-900 mb-3">Authentication Method</h4>
+                                <div class="space-y-2">
+                                    <label class="flex items-center">
+                                        <input type="radio" name="authMethod" value="oauth" class="text-blue-600 focus:ring-blue-500" checked id="oauthRadio">
+                                        <span class="ml-2 text-sm text-gray-700">OAuth 2.0</span>
+                                    </label>
+                                    <label class="flex items-center">
+                                        <input type="radio" name="authMethod" value="service" class="text-blue-600 focus:ring-blue-500" id="serviceRadio">
+                                        <span class="ml-2 text-sm text-gray-700">Service Account</span>
+                                    </label>
+                                </div>
+                                
+                                <!-- OAuth 2.0 fields (shown by default) -->
+                                <div id="oauthFields" class="mt-4 space-y-3">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Client ID</label>
+                                        <input type="text" placeholder="Enter your OAuth 2.0 Client ID" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Client Secret</label>
+                                        <input type="password" placeholder="Enter your OAuth 2.0 Client Secret" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    </div>
+                                </div>
+                                
+                                <!-- Service Account fields (hidden by default) -->
+                                <div id="serviceFields" class="mt-4 space-y-3 hidden">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Service Account Email</label>
+                                        <input type="email" placeholder="service-account@project-iam.gserviceaccount.com" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Private Key (.json)</label>
+                                        <div class="relative">
+                                            <input type="file" accept=".json" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" id="privateKeyFile">
+                                            <div class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white cursor-pointer hover:bg-gray-50 flex items-center justify-between">
+                                                <span id="fileLabel" class="text-gray-500">Choose File</span>
+                                                <span id="fileName" class="text-gray-400 text-xs">No file chosen</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Webhook Settings Section -->
+                    <div>
+                        <div class="flex items-center mb-4">
+                            <i class="fas fa-webhook mr-2 text-gray-600"></i>
+                            <h3 class="text-lg font-medium text-gray-900">Webhook Settings</h3>
+                        </div>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-700">Enable webhook notifications</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" class="sr-only peer" id="enableWebhooks" checked>
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            
+                            <!-- Added ID to webhook settings content for conditional visibility -->
+                            <div id="webhookSettingsContent" class="space-y-4">
+                                <!-- Added Webhook URL input field -->
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Webhook URL</label>
+                                    <input type="url" placeholder="https://your-api.com/webhook" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                </div>
+                                
+                                <!-- Added Event Triggers section -->
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-3">Event Triggers</label>
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div class="space-y-2">
+                                            <label class="flex items-center">
+                                                <input type="checkbox" class="text-blue-600 focus:ring-blue-500 rounded">
+                                                <span class="ml-2 text-sm text-gray-700">Scraping Started</span>
+                                            </label>
+                                            <label class="flex items-center">
+                                                <input type="checkbox" class="text-blue-600 focus:ring-blue-500 rounded">
+                                                <span class="ml-2 text-sm text-gray-700">Error Occurred</span>
+                                            </label>
+                                        </div>
+                                        <div class="space-y-2">
+                                            <label class="flex items-center">
+                                                <input type="checkbox" class="text-blue-600 focus:ring-blue-500 rounded" checked>
+                                                <span class="ml-2 text-sm text-gray-700">Scraping Completed</span>
+                                            </label>
+                                            <label class="flex items-center">
+                                                <input type="checkbox" class="text-blue-600 focus:ring-blue-500 rounded">
+                                                <span class="ml-2 text-sm text-gray-700">Page Completed</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Added Authentication subsection -->
+                                <div class="pl-4 border-l-2 border-gray-200">
+                                    <div class="flex items-center mb-3">
+                                        <i class="fas fa-key mr-2 text-gray-500 text-sm"></i>
+                                        <h4 class="text-sm font-medium text-gray-900">Authentication</h4>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-4 mb-4">
+                                        <div class="space-y-2">
+                                            <label class="flex items-center">
+                                                <input type="radio" name="webhookAuth" value="none" class="text-blue-600 focus:ring-blue-500" checked>
+                                                <span class="ml-2 text-sm text-gray-700">None</span>
+                                            </label>
+                                            <label class="flex items-center">
+                                                <input type="radio" name="webhookAuth" value="basic" class="text-blue-600 focus:ring-blue-500">
+                                                <span class="ml-2 text-sm text-gray-700">Basic Auth</span>
+                                            </label>
+                                        </div>
+                                        <div class="space-y-2">
+                                            <label class="flex items-center">
+                                                <input type="radio" name="webhookAuth" value="bearer" class="text-blue-600 focus:ring-blue-500">
+                                                <span class="ml-2 text-sm text-gray-700">Bearer Token</span>
+                                            </label>
+                                            <label class="flex items-center">
+                                                <input type="radio" name="webhookAuth" value="api" class="text-blue-600 focus:ring-blue-500">
+                                                <span class="ml-2 text-sm text-gray-700">API Key</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Added Test Webhook button -->
+                                    <button class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-md text-sm border border-gray-300">
+                                        Test Webhook
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Settings Footer -->
+                <div class="flex items-center justify-end gap-3 p-6 border-t bg-gray-50">
+                    <button id="cancelSettings" class="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md">
+                        Cancel
+                    </button>
+                    <button id="saveSettings" class="bg-gray-900 text-white px-4 py-2 rounded-md hover:bg-gray-800">
+                        Save Settings
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Sidebar Menu -->
+    <div id="sidebarMenu" class="fixed left-0 top-0 h-full w-80 bg-white shadow-lg z-50 transform -translate-x-full transition-transform duration-300 ease-in-out">
+        <!-- Menu Header -->
+        <div class="flex items-center justify-between p-4 border-b">
+            <h2 class="text-lg font-semibold text-gray-900">Menu</h2>
+            <button id="closeSidebar" class="text-gray-500 hover:text-gray-700">
+                <i class="fas fa-times text-xl"></i>
+            </button>
+        </div>
+        
+        <!-- Crawl History Section -->
+        <div class="p-4">
+            <div class="flex items-center mb-4">
+                <i class="fas fa-history mr-2 text-gray-600"></i>
+                <h3 class="font-medium text-gray-900">Crawl History</h3>
+            </div>
+            
+            <div class="space-y-3">
+                <div class="p-3 bg-gray-50 rounded-lg">
+                    <div class="flex items-start justify-between">
+                        <div class="flex-1">
+                            <div class="font-medium text-blue-600 text-sm">example.com/products</div>
+                            <div class="flex justify-between items-center mt-1">
+                                <span class="text-xs text-gray-500">2024-01-15</span>
+                                <span class="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">150 items</span>
+                            </div>
+                        </div>
+                        <button class="text-gray-400 hover:text-red-500 ml-2 crawl-history-remove">
+                            <i class="fas fa-times text-sm"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="p-3 bg-gray-50 rounded-lg">
+                    <div class="flex items-start justify-between">
+                        <div class="flex-1">
+                            <div class="font-medium text-blue-600 text-sm">shop.example.com/catalog</div>
+                            <div class="flex justify-between items-center mt-1">
+                                <span class="text-xs text-gray-500">2024-01-14</span>
+                                <span class="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">89 items</span>
+                            </div>
+                        </div>
+                        <button class="text-gray-400 hover:text-red-500 ml-2 crawl-history-remove">
+                            <i class="fas fa-times text-sm"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="p-3 bg-gray-50 rounded-lg">
+                    <div class="flex items-start justify-between">
+                        <div class="flex-1">
+                            <div class="font-medium text-blue-600 text-sm">marketplace.com/listings</div>
+                            <div class="flex justify-between items-center mt-1">
+                                <span class="text-xs text-gray-500">2024-01-13</span>
+                                <span class="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">234 items</span>
+                            </div>
+                        </div>
+                        <button class="text-gray-400 hover:text-red-500 ml-2 crawl-history-remove">
+                            <i class="fas fa-times text-sm"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- User Profile Section -->
+        <div class="absolute bottom-0 left-0 right-0 border-t bg-white">
+            <div class="p-4">
+                <div class="flex items-center mb-4">
+                    <div class="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold">
+                        JD
+                    </div>
+                    <div class="ml-3 flex-1">
+                        <div class="font-medium text-gray-900 text-sm">John Doe</div>
+                        <div class="text-xs text-gray-500">john@example.com</div>
+                        <div class="text-xs text-blue-600 font-medium">Free Plan</div>
+                    </div>
+                    <i class="fas fa-chevron-up text-gray-400"></i>
+                </div>
+                
+                <div class="space-y-2">
+                    <button class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                        <i class="fas fa-credit-card mr-3 text-gray-500"></i>
+                        Upgrade Plan
+                    </button>
+                    <button id="openSettings" class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                        <i class="fas fa-cog mr-3 text-gray-500"></i>
+                        Settings
+                    </button>
+                    <button class="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded flex items-center">
+                        <i class="fas fa-sign-out-alt mr-3 text-red-500"></i>
+                        Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="bg-white shadow-sm border-b">
+        <div class="max-w-7xl mx-auto px-4 py-4">
+            <div class="flex items-center justify-center">
+                <!-- Added click handler to hamburger menu button -->
+                <button id="menuToggle" class="mr-4">
+                    <i class="fas fa-bars text-gray-600"></i>
+                </button>
+                <div class="flex items-center">
+                    <i class="fas fa-cog text-blue-500 mr-2 text-xl"></i>
+                    <div>
+                        <h1 class="text-xl font-semibold text-gray-900">Instant Data Scraper</h1>
+                        <p class="text-sm text-gray-600">Extract data from web pages with ease</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="max-w-7xl mx-auto px-4 py-6">
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            <!-- Left Sidebar -->
+            <div class="lg:col-span-1 space-y-6">
+                <!-- Scraping Controls -->
+                <div class="bg-white rounded-lg shadow-sm border p-4">
+                    <div class="flex items-center mb-4">
+                        <i class="fas fa-cog mr-2 text-gray-600"></i>
+                        <h2 class="font-medium text-gray-900">Scraping Controls</h2>
+                    </div>
+                    
+                    <!-- Added Pagination section above Start Crawling button -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Pagination</label>
+                        <div class="space-y-3">
+                            <label class="flex items-center">
+                                <input type="radio" name="pagination" value="none" class="text-blue-600 focus:ring-blue-500" checked id="paginationNone">
+                                <span class="ml-2 text-sm text-gray-700">None</span>
+                            </label>
+                            
+                            <div>
+                                <label class="flex items-center mb-2">
+                                    <input type="radio" name="pagination" value="css" class="text-blue-600 focus:ring-blue-500" id="paginationCSS">
+                                    <span class="ml-2 text-sm text-gray-700">CSS selector:</span>
+                                </label>
+                                <!-- Moved textbox and Apply button to CSS selector option -->
+                                <div id="cssSelector" class="ml-6 space-y-2 hidden">
+                                    <input type="text" 
+                                           placeholder='e.g. a.next, button[rel="next"]'
+                                           list="selectorSuggestions"
+                                           id="cssSelectorInput"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    <datalist id="selectorSuggestions">
+                                        <option value="a.next">
+                                        <option value="button[rel='next']">
+                                    </datalist>
+                                    <button class="bg-gray-900 text-white px-4 py-2 rounded-md text-sm hover:bg-gray-800 w-full">
+                                        Apply
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <label class="flex items-center">
+                                <input type="radio" name="pagination" value="infinite" class="text-blue-600 focus:ring-blue-500" id="paginationInfinite">
+                                <span class="ml-2 text-sm text-gray-700">Infinite scroll</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <button class="w-full bg-green-600 hover:bg-green-700 text-white rounded-md px-4 py-3 text-sm font-medium flex items-center justify-center mb-4">
+                        <i class="fas fa-play mr-2"></i>
+                        Start Crawling
+                    </button>
+                    
+                    <!-- Removed the old infinite scroll checkbox and Next Page Selector section -->
+                    
+                    <div class="space-y-3">
+                        <div class="flex items-center">
+                            <i class="fas fa-clock mr-2 text-gray-500"></i>
+                            <span class="text-sm text-gray-700">Min Delay (seconds)</span>
+                        </div>
+                        <input type="number" value="1" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm">
+                        
+                        <div class="flex items-center">
+                            <i class="fas fa-clock mr-2 text-gray-500"></i>
+                            <span class="text-sm text-gray-700">Max Delay (seconds)</span>
+                        </div>
+                        <input type="number" value="20" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm">
+                    </div>
+                </div>
+
+                <!-- Export Data -->
+                <div class="bg-white rounded-lg shadow-sm border p-4">
+                    <div class="flex items-center mb-4">
+                        <i class="fas fa-download mr-2 text-gray-600"></i>
+                        <h2 class="font-medium text-gray-900">Export Data</h2>
+                    </div>
+                    
+                    <div class="space-y-2">
+                        <button class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                            <i class="fas fa-file-csv mr-2"></i>
+                            Download CSV
+                        </button>
+                        <button class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                            <i class="fas fa-file-excel mr-2"></i>
+                            Download XLSX
+                        </button>
+                        <button class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                            <i class="fas fa-copy mr-2"></i>
+                            Copy All Data
+                        </button>
+                        <button class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                            <i class="fas fa-redo mr-2"></i>
+                            Reset Columns
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="lg:col-span-3 space-y-6">
+                <!-- Stats -->
+                <div class="bg-white rounded-lg shadow-sm border p-6">
+                    <div class="grid grid-cols-3 gap-6 mb-4">
+                        <div class="text-center">
+                            <div class="text-3xl font-bold text-blue-600">25</div>
+                            <div class="text-sm text-gray-600">Items Scraped</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-3xl font-bold text-green-600">1</div>
+                            <div class="text-sm text-gray-600">Pages Crawled</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-3xl font-bold text-purple-600">0s</div>
+                            <div class="text-sm text-gray-600">Working Time</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-end">
+                        <span class="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium mr-2">Ready</span>
+                        <i class="fas fa-info-circle text-gray-400"></i>
+                    </div>
+                </div>
+
+                <!-- Notifications -->
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <p class="text-sm text-blue-800">Table detected! Configure settings and start scraping.</p>
+                </div>
+
+                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-center justify-between">
+                    <p class="text-sm text-yellow-800">If you like this extension, please rate it in the Chrome store!</p>
+                    <div class="flex gap-2">
+                        <button class="bg-yellow-600 text-white px-3 py-1 rounded text-sm hover:bg-yellow-700">Rate Now</button>
+                        <button class="text-yellow-800 px-3 py-1 rounded text-sm hover:bg-yellow-100">Later</button>
+                    </div>
+                </div>
+
+                <!-- Scraped Data Table -->
+                <div class="bg-white rounded-lg shadow-sm border">
+                    <div class="p-4 border-b flex items-center justify-between">
+                        <h2 class="font-medium text-gray-900">Scraped Data</h2>
+                        <button class="bg-red-50 hover:bg-red-100 border border-red-200 rounded-md px-4 py-2 text-sm text-red-700 hover:text-red-800 flex items-center">
+                            <i class="fas fa-trash mr-2"></i>
+                            Clear Table
+                        </button>
+                    </div>
+                    
+                    <div class="overflow-x-auto">
+                        <table class="w-full">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-700">Product Name</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-700">Price</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-700">Rating</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-700">Reviews</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-700">Availability</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200">
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 text-sm text-blue-600">Product 469</td>
+                                    <td class="px-4 py-3 text-sm text-blue-600">$50.46</td>
+                                    <td class="px-4 py-3 text-sm">3.3/5</td>
+                                    <td class="px-4 py-3 text-sm">302</td>
+                                    <td class="px-4 py-3 text-sm text-green-600">In Stock</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 text-sm text-blue-600">Product 990</td>
+                                    <td class="px-4 py-3 text-sm text-blue-600">$5.20</td>
+                                    <td class="px-4 py-3 text-sm">4.3/5</td>
+                                    <td class="px-4 py-3 text-sm">311</td>
+                                    <td class="px-4 py-3 text-sm text-red-600">Out of Stock</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 text-sm text-blue-600">Product 292</td>
+                                    <td class="px-4 py-3 text-sm text-blue-600">$63.26</td>
+                                    <td class="px-4 py-3 text-sm">1.2/5</td>
+                                    <td class="px-4 py-3 text-sm">407</td>
+                                    <td class="px-4 py-3 text-sm text-green-600">In Stock</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 text-sm text-blue-600">Product 564</td>
+                                    <td class="px-4 py-3 text-sm text-blue-600">$11.56</td>
+                                    <td class="px-4 py-3 text-sm">0.8/5</td>
+                                    <td class="px-4 py-3 text-sm">289</td>
+                                    <td class="px-4 py-3 text-sm text-red-600">Out of Stock</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 text-sm text-blue-600">Product 353</td>
+                                    <td class="px-4 py-3 text-sm text-blue-600">$88.85</td>
+                                    <td class="px-4 py-3 text-sm">3.4/5</td>
+                                    <td class="px-4 py-3 text-sm">392</td>
+                                    <td class="px-4 py-3 text-sm text-green-600">In Stock</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 text-sm text-blue-600">Product 182</td>
+                                    <td class="px-4 py-3 text-sm text-blue-600">$39.70</td>
+                                    <td class="px-4 py-3 text-sm">1.6/5</td>
+                                    <td class="px-4 py-3 text-sm">90</td>
+                                    <td class="px-4 py-3 text-sm text-green-600">In Stock</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 text-sm text-blue-600">Product 981</td>
+                                    <td class="px-4 py-3 text-sm text-blue-600">$2.18</td>
+                                    <td class="px-4 py-3 text-sm">1.4/5</td>
+                                    <td class="px-4 py-3 text-sm">328</td>
+                                    <td class="px-4 py-3 text-sm text-green-600">In Stock</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 text-sm text-blue-600">Product 467</td>
+                                    <td class="px-4 py-3 text-sm text-blue-600">$96.75</td>
+                                    <td class="px-4 py-3 text-sm">0.1/5</td>
+                                    <td class="px-4 py-3 text-sm">92</td>
+                                    <td class="px-4 py-3 text-sm text-green-600">In Stock</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 text-sm text-blue-600">Product 26</td>
+                                    <td class="px-4 py-3 text-sm text-blue-600">$44.85</td>
+                                    <td class="px-4 py-3 text-sm">2.5/5</td>
+                                    <td class="px-4 py-3 text-sm">250</td>
+                                    <td class="px-4 py-3 text-sm text-green-600">In Stock</td>
+                                </tr>
+                                <tr class="hover:bg-gray-50">
+                                    <td class="px-4 py-3 text-sm text-blue-600">Product 341</td>
+                                    <td class="px-4 py-3 text-sm text-blue-600">$88.67</td>
+                                    <td class="px-4 py-3 text-sm">4.2/5</td>
+                                    <td class="px-4 py-3 text-sm">349</td>
+                                    <td class="px-4 py-3 text-sm text-red-600">Out of Stock</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="p-4 border-t bg-gray-50">
+                        <p class="text-sm text-gray-600 text-center">Showing first 10 rows of 25 total rows</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Enhanced JavaScript with Settings modal functionality -->
+    <script>
+        // Get DOM elements
+        const menuToggle = document.getElementById('menuToggle');
+        const sidebarMenu = document.getElementById('sidebarMenu');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+        const closeSidebar = document.getElementById('closeSidebar');
+        
+        // Settings modal elements
+        const openSettings = document.getElementById('openSettings');
+        const settingsModal = document.getElementById('settingsModal');
+        const settingsOverlay = document.getElementById('settingsOverlay');
+        const closeSettings = document.getElementById('closeSettings');
+        const cancelSettings = document.getElementById('cancelSettings');
+        const saveSettings = document.getElementById('saveSettings');
+        const addSelector = document.getElementById('addSelector');
+
+        // Authentication method elements
+        const oauthRadio = document.getElementById('oauthRadio');
+        const serviceRadio = document.getElementById('serviceRadio');
+        const oauthFields = document.getElementById('oauthFields');
+        const serviceFields = document.getElementById('serviceFields');
+        const privateKeyFile = document.getElementById('privateKeyFile');
+        const fileName = document.getElementById('fileName');
+
+        const autoUploadDrive = document.getElementById('autoUploadDrive');
+        const enableWebhooks = document.getElementById('enableWebhooks');
+        const authMethodSection = document.getElementById('authMethodSection');
+        const webhookSettingsContent = document.getElementById('webhookSettingsContent');
+
+        const paginationNone = document.getElementById('paginationNone');
+        const paginationCSS = document.getElementById('paginationCSS');
+        const paginationInfinite = document.getElementById('paginationInfinite');
+        const cssSelector = document.getElementById('cssSelector');
+
+        // Function to open sidebar
+        function openSidebar() {
+            sidebarOverlay.classList.remove('hidden');
+            sidebarMenu.classList.remove('-translate-x-full');
+            document.body.style.overflow = 'hidden';
+        }
+
+        // Function to close sidebar
+        function closeSidebarMenu() {
+            sidebarOverlay.classList.add('hidden');
+            sidebarMenu.classList.add('-translate-x-full');
+            document.body.style.overflow = 'auto';
+        }
+
+        // Function to open settings modal
+        function openSettingsModal() {
+            settingsOverlay.classList.remove('hidden');
+            settingsModal.classList.remove('hidden');
+            document.body.style.overflow = 'hidden';
+            // Close sidebar when opening settings
+            closeSidebarMenu();
+        }
+
+        // Function to close settings modal
+        function closeSettingsModal() {
+            settingsOverlay.classList.add('hidden');
+            settingsModal.classList.add('hidden');
+            document.body.style.overflow = 'auto';
+        }
+
+        // Function to add new selector
+        function addNewSelector() {
+            const selectorsList = document.getElementById('selectorsList');
+            const newSelector = document.createElement('div');
+            newSelector.className = 'flex items-center justify-between p-3 bg-gray-50 rounded-lg';
+            newSelector.innerHTML = `
+                <input type="text" placeholder="Enter CSS selector" class="flex-1 bg-transparent text-blue-600 font-mono text-sm focus:outline-none">
+                <button class="text-gray-400 hover:text-red-500 ml-2" onclick="this.parentElement.remove(); updateSelectorSuggestions();">
+                    <i class="fas fa-trash"></i>
+                </button>
+            `;
+            selectorsList.appendChild(newSelector);
+            // Focus on the new input
+            const input = newSelector.querySelector('input');
+            input.focus();
+            
+            input.addEventListener('blur', function() {
+                if (this.value.trim()) {
+                    // Convert input to span when user finishes editing
+                    const span = document.createElement('span');
+                    span.className = 'text-blue-600 font-mono text-sm';
+                    span.textContent = this.value.trim();
+                    this.parentElement.replaceChild(span, this);
+                    updateSelectorSuggestions();
+                }
+            });
+            
+            input.addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') {
+                    this.blur();
+                }
+            });
+        }
+
+        // Function to switch authentication method fields
+        function switchAuthMethod() {
+            if (oauthRadio.checked) {
+                oauthFields.classList.remove('hidden');
+                serviceFields.classList.add('hidden');
+            } else if (serviceRadio.checked) {
+                oauthFields.classList.add('hidden');
+                serviceFields.classList.remove('hidden');
+            }
+        }
+
+        // Function to toggle authentication method section visibility
+        function toggleAuthMethodSection() {
+            if (autoUploadDrive.checked) {
+                authMethodSection.classList.remove('hidden');
+            } else {
+                authMethodSection.classList.add('hidden');
+            }
+        }
+
+        // Function to toggle webhook settings content visibility
+        function toggleWebhookSettingsContent() {
+            if (enableWebhooks.checked) {
+                webhookSettingsContent.classList.remove('hidden');
+            } else {
+                webhookSettingsContent.classList.add('hidden');
+            }
+        }
+
+        function toggleCSSSelector() {
+            if (paginationCSS.checked) {
+                cssSelector.classList.remove('hidden');
+            } else {
+                cssSelector.classList.add('hidden');
+            }
+        }
+
+        // Function to update selector suggestions
+        function updateSelectorSuggestions() {
+            const datalist = document.getElementById('selectorSuggestions');
+            const selectorsList = document.getElementById('selectorsList');
+            
+            // Clear existing options
+            datalist.innerHTML = '';
+            
+            // Get all current selectors from settings
+            const selectorItems = selectorsList.querySelectorAll('.flex.items-center.justify-between');
+            selectorItems.forEach(item => {
+                const selectorText = item.querySelector('span')?.textContent || item.querySelector('input')?.value;
+                if (selectorText && selectorText.trim()) {
+                    const option = document.createElement('option');
+                    option.value = selectorText.trim();
+                    datalist.appendChild(option);
+                }
+            });
+        }
+
+        // Event listeners for sidebar
+        menuToggle.addEventListener('click', openSidebar);
+        closeSidebar.addEventListener('click', closeSidebarMenu);
+        sidebarOverlay.addEventListener('click', closeSidebarMenu);
+
+        // Event listeners for settings modal
+        openSettings.addEventListener('click', openSettingsModal);
+        closeSettings.addEventListener('click', closeSettingsModal);
+        cancelSettings.addEventListener('click', closeSettingsModal);
+        settingsOverlay.addEventListener('click', closeSettingsModal);
+        addSelector.addEventListener('click', addNewSelector);
+
+        // Event listeners for authentication method radio buttons
+        oauthRadio.addEventListener('change', switchAuthMethod);
+        serviceRadio.addEventListener('change', switchAuthMethod);
+
+        paginationNone.addEventListener('change', toggleCSSSelector);
+        paginationCSS.addEventListener('change', toggleCSSSelector);
+        paginationInfinite.addEventListener('change', toggleCSSSelector);
+
+        // File input change handler
+        privateKeyFile.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                fileName.textContent = file.name;
+            } else {
+                fileName.textContent = 'No file chosen';
+            }
+        });
+
+        // Save settings functionality
+        saveSettings.addEventListener('click', function() {
+            // Here you would typically save the settings to localStorage or send to server
+            console.log('Settings saved!');
+            closeSettingsModal();
+        });
+
+        // Add delete functionality to existing selectors
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('fa-trash') || e.target.closest('button')?.querySelector('.fa-trash')) {
+                const selectorItem = e.target.closest('.flex.items-center.justify-between');
+                if (selectorItem && selectorItem.parentElement.id === 'selectorsList') {
+                    selectorItem.remove();
+                    updateSelectorSuggestions();
+                }
+            }
+        });
+
+        // Close modals on escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                if (!settingsModal.classList.contains('hidden')) {
+                    closeSettingsModal();
+                } else if (!sidebarMenu.classList.contains('-translate-x-full')) {
+                    closeSidebarMenu();
+                }
+            }
+        });
+
+        document.addEventListener('click', function(e) {
+            if (e.target.classList.contains('fa-times') && e.target.closest('.crawl-history-remove')) {
+                const historyItem = e.target.closest('.p-3.bg-gray-50.rounded-lg');
+                if (historyItem) {
+                    historyItem.remove();
+                }
+            }
+        });
+
+        // Event listeners for conditional visibility
+        autoUploadDrive.addEventListener('change', toggleAuthMethodSection);
+        enableWebhooks.addEventListener('change', toggleWebhookSettingsContent);
+
+        // Initialize visibility on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            updateSelectorSuggestions();
+        });
+    </script>
+</body>
+</html>

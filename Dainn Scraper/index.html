@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title id="pageTitle">Instant Data Scraper</title>
+    <link href="css/tailwind.css" rel="stylesheet">
+    <link href="css/table-enhancements.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Added loading overlay that shows on page load -->
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="fixed inset-0 bg-white z-[100] flex items-center justify-center">
+        <div class="text-center">
+            <div class="relative">
+                <div class="w-16 h-16 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-4"></div>
+                <div class="absolute inset-0 w-16 h-16 border-4 border-transparent border-t-blue-400 rounded-full animate-spin mx-auto" style="animation-delay: -0.15s; animation-duration: 1.5s;"></div>
+            </div>
+            <div class="flex items-center justify-center mb-2">
+                <i class="fas fa-cog text-blue-500 mr-2 text-xl"></i>
+                <h2 class="text-xl font-semibold text-gray-900">Instant Data Scraper</h2>
+            </div>
+            <p id="waitHeader" class="text-gray-600 text-sm">Loading interface...</p>
+            <div id="noResponseErr" class="alert alert-danger"></div>
+        </div>
+    </div>
+
+    <!-- Sidebar Overlay -->
+    <div id="sidebarOverlay" class="fixed inset-0 bg-black bg-opacity-50 z-40 hidden"></div>
+    
+    <!-- Settings Modal Overlay -->
+    <div id="settingsOverlay" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden"></div>
+    
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="fixed inset-0 z-50 hidden">
+        <div class="flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                <!-- Settings Header -->
+                <div class="flex items-center p-6 border-b">
+                    <button id="closeSettings" class="mr-4 text-gray-500 hover:text-gray-700">
+                        <i class="fas fa-arrow-left text-xl"></i>
+                    </button>
+                    <div class="flex items-center">
+                        <i class="fas fa-cog mr-2 text-gray-600"></i>
+                        <h2 class="text-xl font-semibold text-gray-900">Settings</h2>
+                    </div>
+                </div>
+                
+                <!-- Settings Content -->
+                <div class="p-6 space-y-8">
+                    <!-- Next Page Selectors Section -->
+                    <div>
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-medium text-gray-900">Next Page Selectors</h3>
+                            <button id="addSelector" class="bg-gray-900 text-white px-4 py-2 rounded-md text-sm hover:bg-gray-800 flex items-center">
+                                <i class="fas fa-plus mr-2"></i>
+                                Add Selector
+                            </button>
+                        </div>
+                        
+                        <div id="selectorsList" class="space-y-3">
+                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <span class="text-blue-600 font-mono text-sm">a[title='Next Page']</span>
+                                <button class="text-gray-400 hover:text-red-500">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                            <div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                                <span class="text-blue-600 font-mono text-sm">button[rel='next']</span>
+                                <button class="text-gray-400 hover:text-red-500">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Automation Settings Section -->
+                    <div>
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">Automation Settings</h3>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-700">Auto download CSV when scraping is done</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" class="sr-only peer" id="autoDownloadCSV">
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-700">Auto upload file to Google Drive when done</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" class="sr-only peer" id="autoUploadDrive">
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            
+                            <!-- Added ID to Authentication Method section for conditional visibility -->
+                            <div id="authMethodSection" class="mt-6 pl-4 border-l-2 border-gray-200">
+                                <h4 class="text-sm font-medium text-gray-900 mb-3">Authentication Method</h4>
+                                <div class="space-y-2">
+                                    <label class="flex items-center">
+                                        <input type="radio" name="authMethod" value="oauth" class="text-blue-600 focus:ring-blue-500" checked id="oauthRadio">
+                                        <span class="ml-2 text-sm text-gray-700">OAuth 2.0</span>
+                                    </label>
+                                    <label class="flex items-center">
+                                        <input type="radio" name="authMethod" value="service" class="text-blue-600 focus:ring-blue-500" id="serviceRadio">
+                                        <span class="ml-2 text-sm text-gray-700">Service Account</span>
+                                    </label>
+                                </div>
+                                
+                                <!-- OAuth 2.0 fields (shown by default) -->
+                                <div id="oauthFields" class="mt-4 space-y-3">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Client ID</label>
+                                        <input type="text" placeholder="Enter your OAuth 2.0 Client ID" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Client Secret</label>
+                                        <input type="password" placeholder="Enter your OAuth 2.0 Client Secret" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    </div>
+                                </div>
+                                
+                                <!-- Service Account fields (hidden by default) -->
+                                <div id="serviceFields" class="mt-4 space-y-3 hidden">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Service Account Email</label>
+                                        <input type="email" placeholder="service-account@project-iam.gserviceaccount.com" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-1">Private Key (.json)</label>
+                                        <div class="relative">
+                                            <input type="file" accept=".json" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" id="privateKeyFile">
+                                            <div class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm bg-white cursor-pointer hover:bg-gray-50 flex items-center justify-between">
+                                                <span id="fileLabel" class="text-gray-500">Choose File</span>
+                                                <span id="fileName" class="text-gray-400 text-xs">No file chosen</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Webhook Settings Section -->
+                    <div>
+                        <div class="flex items-center mb-4">
+                            <i class="fas fa-webhook mr-2 text-gray-600"></i>
+                            <h3 class="text-lg font-medium text-gray-900">Webhook Settings</h3>
+                        </div>
+                        <div class="space-y-4">
+                            <div class="flex items-center justify-between">
+                                <span class="text-gray-700">Enable webhook notifications</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" class="sr-only peer" id="enableWebhooks">
+                                    <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            
+                            <!-- Added ID to webhook settings content for conditional visibility -->
+                            <div id="webhookSettingsContent" class="space-y-4">
+                                <!-- Added Webhook URL input field -->
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Webhook URL</label>
+                                    <input type="url" placeholder="https://your-api.com/webhook" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                </div>
+                                
+                                <!-- Added Event Triggers section -->
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-3">Event Triggers</label>
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div class="space-y-2">
+                                            <label class="flex items-center">
+                                                <input type="checkbox" class="text-blue-600 focus:ring-blue-500 rounded">
+                                                <span class="ml-2 text-sm text-gray-700">Scraping Started</span>
+                                            </label>
+                                            <label class="flex items-center">
+                                                <input type="checkbox" class="text-blue-600 focus:ring-blue-500 rounded">
+                                                <span class="ml-2 text-sm text-gray-700">Error Occurred</span>
+                                            </label>
+                                        </div>
+                                        <div class="space-y-2">
+                                            <label class="flex items-center">
+                                                <input type="checkbox" class="text-blue-600 focus:ring-blue-500 rounded" checked>
+                                                <span class="ml-2 text-sm text-gray-700">Scraping Completed</span>
+                                            </label>
+                                            <label class="flex items-center">
+                                                <input type="checkbox" class="text-blue-600 focus:ring-blue-500 rounded">
+                                                <span class="ml-2 text-sm text-gray-700">Page Completed</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Added Authentication subsection -->
+                                <div class="pl-4 border-l-2 border-gray-200">
+                                    <div class="flex items-center mb-3">
+                                        <i class="fas fa-key mr-2 text-gray-500 text-sm"></i>
+                                        <h4 class="text-sm font-medium text-gray-900">Authentication</h4>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-4 mb-4">
+                                        <div class="space-y-2">
+                                            <label class="flex items-center">
+                                                <input type="radio" name="webhookAuth" value="none" class="text-blue-600 focus:ring-blue-500" checked>
+                                                <span class="ml-2 text-sm text-gray-700">None</span>
+                                            </label>
+                                            <label class="flex items-center">
+                                                <input type="radio" name="webhookAuth" value="basic" class="text-blue-600 focus:ring-blue-500">
+                                                <span class="ml-2 text-sm text-gray-700">Basic Auth</span>
+                                            </label>
+                                        </div>
+                                        <div class="space-y-2">
+                                            <label class="flex items-center">
+                                                <input type="radio" name="webhookAuth" value="bearer" class="text-blue-600 focus:ring-blue-500">
+                                                <span class="ml-2 text-sm text-gray-700">Bearer Token</span>
+                                            </label>
+                                            <label class="flex items-center">
+                                                <input type="radio" name="webhookAuth" value="api" class="text-blue-600 focus:ring-blue-500">
+                                                <span class="ml-2 text-sm text-gray-700">API Key</span>
+                                            </label>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Added Test Webhook button -->
+                                    <button class="bg-gray-100 hover:bg-gray-200 text-gray-700 px-4 py-2 rounded-md text-sm border border-gray-300">
+                                        Test Webhook
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Settings Footer -->
+                <div class="flex items-center justify-between p-6 border-t bg-gray-50">
+                    <button id="resetSettings" class="px-4 py-2 text-red-700 hover:bg-red-50 border border-red-200 rounded-md">
+                        Reset to Defaults
+                    </button>
+                    <div class="flex gap-3">
+                        <button id="cancelSettings" class="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md">
+                            Cancel
+                        </button>
+                        <button id="saveSettings" class="bg-gray-900 text-white px-4 py-2 rounded-md hover:bg-gray-800">
+                            Save Settings
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Sidebar Menu -->
+    <div id="sidebarMenu" class="fixed left-0 top-0 h-full w-80 bg-white shadow-lg z-50 transform -translate-x-full transition-transform duration-300 ease-in-out">
+        <!-- Menu Header -->
+        <div class="flex items-center justify-between p-4 border-b">
+            <h2 class="text-lg font-semibold text-gray-900">Menu</h2>
+            <button id="closeSidebar" class="text-gray-500 hover:text-gray-700">
+                <i class="fas fa-times text-xl"></i>
+            </button>
+        </div>
+        
+        <!-- Crawl History Section -->
+        <div class="p-4">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center">
+                    <i class="fas fa-history mr-2 text-gray-600"></i>
+                    <h3 class="font-medium text-gray-900">Crawl History</h3>
+                </div>
+                <button id="refreshHistory" class="text-gray-500 hover:text-blue-600 transition-colors" title="Refresh crawl history">
+                    <i class="fas fa-sync-alt text-sm"></i>
+                </button>
+            </div>
+            
+            <div id="crawlHistoryContainer" class="space-y-3">
+                <!-- Crawl history items will be dynamically loaded here -->
+            </div>
+        </div>
+        
+        <!-- User Profile Section -->
+        <div class="absolute bottom-0 left-0 right-0 border-t bg-white">
+            <div class="p-4">
+                <div class="flex items-center mb-4">
+                    <div class="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center text-white font-semibold">
+                        JD
+                    </div>
+                    <div class="ml-3 flex-1">
+                        <div class="font-medium text-gray-900 text-sm">John Doe</div>
+                        <div class="text-xs text-gray-500">john@example.com</div>
+                        <div class="text-xs text-blue-600 font-medium">Free Plan</div>
+                    </div>
+                    <i class="fas fa-chevron-up text-gray-400"></i>
+                </div>
+                
+                <div class="space-y-2">
+                    <button class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                        <i class="fas fa-credit-card mr-3 text-gray-500"></i>
+                        Upgrade Plan
+                    </button>
+                    <button id="openSettings" class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                        <i class="fas fa-cog mr-3 text-gray-500"></i>
+                        Settings
+                    </button>
+                    <button class="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded flex items-center">
+                        <i class="fas fa-sign-out-alt mr-3 text-red-500"></i>
+                        Logout
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Header -->
+    <header class="bg-white shadow-sm border-b">
+        <div class="max-w-full mx-auto px-2 py-2">
+            <div class="flex items-center justify-center">
+                <!-- Added click handler to hamburger menu button -->
+                <button id="menuToggle" class="mr-4">
+                    <i class="fas fa-bars fa-xl text-gray-600"></i>
+                </button>
+                <div class="flex items-center">
+                    <img src="dainn32.png" alt="Dainn Scraper" class="w-10 h-10 mr-2">
+                    <span>
+                        <div>
+                            <h1 class="text-xl font-semibold text-gray-900">Dainn Scraper</h1>
+                            <p class="text-sm text-gray-600">Extract data from web pages with ease</p>
+                        </div>
+                    </span>                    
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="max-w-full mx-auto px-2 py-3">
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            <!-- Left Sidebar -->
+            <div class="lg:col-span-1 space-y-4">
+                <!-- Scraping Controls -->
+                <div class="bg-white rounded-lg shadow-sm border p-3">
+                    <div class="flex items-center mb-4">
+                        <i class="fas fa-cog mr-2 text-gray-600"></i>
+                        <h2 class="font-semibold text-gray-900 text-lg">Scraping Controls</h2>
+                    </div>
+                    
+                    <!-- Added Pagination section above Start Crawling button -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Pagination</label>
+                        <div class="space-y-3">
+                            <label class="flex items-center">
+                                <input type="radio" name="pagination" value="none" class="text-blue-600 focus:ring-blue-500" checked id="paginationNone">
+                                <span class="ml-2 text-sm text-gray-700">None</span>
+                            </label>
+                            
+                            <div>
+                                <label class="flex items-center mb-2">
+                                    <input type="radio" name="pagination" value="css" class="text-blue-600 focus:ring-blue-500" id="paginationCSS">
+                                    <span class="ml-2 text-sm text-gray-700">CSS selector:</span>
+                                </label>
+                                <!-- Moved textbox and Apply button to CSS selector option -->
+                                <div id="cssSelector" class="ml-6 space-y-2 hidden">
+                                    <input type="text" 
+                                           placeholder='e.g. a[title='Next Page'], button[rel="next"]'
+                                           list="selectorSuggestions"
+                                           id="nextSelectorInput"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    <datalist id="selectorSuggestions">
+                                        <option value="a[title='Next Page']">
+                                        <option value="button[rel='next']">
+                                    </datalist>
+                                    <button id='applyNextSelector' class="bg-gray-900 text-white px-4 py-2 rounded-md text-sm hover:bg-gray-800 w-full">
+                                        Use selector
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <label class="flex items-center">
+                                <input id="paginationInfinite" type="radio" name="pagination" value="infinite" class="text-blue-600 focus:ring-blue-500">
+                                <span class="ml-2 text-sm text-gray-700">Infinite scroll</span>
+                            </label>
+                        </div>                       
+                    </div>
+                    
+                    <!-- Removed the old infinite scroll checkbox and Next Page Selector section -->
+                    <div class="space-y-3">
+                        <div class="flex items-center">
+                            <i class="fas fa-clock mr-2 text-gray-500"></i>
+                            <span class="text-sm text-gray-700">Min Delay (seconds)</span>
+                        </div>
+                        <input id='crawlDelay' type="number" value="1" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm">
+                        
+                        <div class="flex items-center">
+                            <i class="fas fa-clock mr-2 text-gray-500"></i>
+                            <span class="text-sm text-gray-700">Max Delay (seconds)</span>
+                        </div>
+                        <input id='maxWait' type="number" value="20" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm">
+                    </div> 
+                    <br/>
+                    <div class="mb-4">
+                        <button id='startScraping' class="w-full bg-green-600 hover:bg-green-700 text-white rounded-md px-4 py-3 text-sm font-medium flex items-center justify-center mb-4">
+                            <i class="fas fa-play mr-2"></i>
+                            Start Crawling
+                        </button>
+                        <button id='stopScraping' style="background-color: red !important;" class="w-full bg-red-600 hover:bg-red-700 text-white rounded-md px-4 py-3 text-sm font-medium flex items-center justify-center mb-4 hidden">
+                            <i class="fas fa-stop mr-2"></i>
+                            Stop Crawling
+                        </button>
+                    </div> 
+                </div>
+                
+
+                <!-- Export Data -->
+                <div class="bg-white rounded-lg shadow-sm border p-3">
+                    <div class="flex items-center mb-4">
+                        <i class="fas fa-download mr-2 text-gray-600"></i>
+                        <h2 class="font-semibold text-gray-900 text-lg">Export Data</h2>
+                    </div>
+                    
+                    <div class="space-y-2">
+                        <button id='csv' class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                            <i class="fas fa-file-csv mr-2"></i>
+                            Download CSV
+                        </button>
+                        <button id='xlsx' class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                            <i class="fas fa-file-excel mr-2"></i>
+                            Download XLSX
+                        </button>
+                        <button id='copy' class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                            <i class="fas fa-copy mr-2"></i>
+                            Copy All Data
+                        </button>
+                        <button id='resetColumns' class="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded flex items-center">
+                            <i class="fas fa-redo mr-2"></i>
+                            Reset Columns
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Main Content -->
+            <div class="lg:col-span-3 space-y-4">
+                <!-- Stats -->
+                <div class="bg-white rounded-lg shadow-sm border p-4">
+                    <div class="grid grid-cols-3 gap-4 mb-3">
+                        <div class="text-center">
+                            <div class="text-3xl font-bold text-blue-600">25</div>
+                            <div class="text-sm text-gray-600 font-medium">Items Scraped</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-3xl font-bold text-green-600">1</div>
+                            <div class="text-sm text-gray-600 font-medium">Pages Crawled</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-3xl font-bold text-purple-600">0s</div>
+                            <div class="text-sm text-gray-600 font-medium">Working Time</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center justify-end">
+                        <span class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium mr-2">Ready</span>
+                        <i class="fas fa-info-circle text-gray-400 text-sm"></i>
+                    </div>
+                </div>
+
+
+                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4 flex items-center justify-between">
+                    <p class="text-sm text-yellow-800">If you like this extension, please rate it in the Chrome store!</p>
+                    <div class="flex gap-2">
+                        <button class="bg-yellow-600 text-white px-3 py-1 rounded text-sm hover:bg-yellow-700">Rate Now</button>
+                        <button class="text-yellow-800 px-3 py-1 rounded text-sm hover:bg-yellow-100">Later</button>
+                    </div>
+                </div>
+
+                <!-- Scraped Data Table -->
+                <div class="bg-white rounded-lg shadow-sm border">
+                    <div class="p-3 border-b flex items-center justify-between">
+                        <h2 class="font-semibold text-gray-900 text-lg">Scraped Data</h2>
+                        <button id='wrongTable' class="bg-red-50 hover:bg-red-100 border border-red-200 rounded-md px-3 py-1 text-sm text-red-700 hover:text-red-800 flex items-center">
+                            <i class="fas fa-trash mr-2"></i>
+                            Clear Table
+                        </button>
+                    </div>
+                    <div id="hot" class="overflow-x-auto">
+                        <!-- Dynamic table content will be generated here by popup.js -->
+                        <div class="flex flex-col items-center justify-center py-12 text-gray-500">
+                            <i class="fas fa-table text-4xl mb-4"></i>
+                            <h3 class="text-lg font-medium mb-2">No Data Available</h3>
+                            <p class="text-sm">Start scraping to see data appear here</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/index-page.js"></script>
+    <script src="js/papaparse.min.js"></script>
+    <script src="js/jquery-3.1.1.min.js"></script>
+    <script src="js/FileSaver.js"></script>
+    <script src="js/bootstrap.min.js"></script>
+    <script src="js/handsontable.full.min.js"></script>
+    <script src="js/xlsx.full.min.js"></script>
+    <script src="popup.js" type="module"></script>
+</body>
+</html>

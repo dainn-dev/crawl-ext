@@ -393,13 +393,16 @@ function x(e, t) {
         headers: {},
         deletedFields: {},
         crawlDelay: 1e3,
-        maxWait: 2e4
+        maxWait: 2e4,
+        autoDownloadCSV: false
     },
     r(t ? () => a.firePageViewEvent(s.hostName, s.startingUrl) : () => a.fireEvent("AnotherTable", {
         hostName: s.hostName,
         startingUrl: s.startingUrl
     })),
     Object.keys(s.config.deletedFields).length && $("#resetColumns").show();
+    // Set auto-download checkbox based on saved config
+    $("#autoDownloadCSV").prop('checked', s.config.autoDownloadCSV || false);
     var n = N(i.url);
     $("#wrongTable").show(),
     s.config.infinateScrollChecked && ($("#nextSelectorGroup").hide(),
@@ -455,7 +458,7 @@ function x(e, t) {
                 escapeChar: '"'
             })],{
                 type: "application/octet-stream"
-            }), n + ".csv")
+            }), generateFilenameFromUrl(i.url) + ".csv")
         }),
         $("#xlsx").off("click").click(function() {
             r(b),
@@ -464,7 +467,7 @@ function x(e, t) {
             }),
             saveAs(new Blob([m(o(w(s.data), i.url.substring(0, 100)))],{
                 type: "application/octet-stream"
-            }), n + ".xlsx")
+            }), generateFilenameFromUrl(i.url) + ".xlsx")
         }),
         $("#copy").off("click").click(function() {
             r(b),
@@ -480,6 +483,18 @@ function x(e, t) {
 function N(e) {
     var t = new URL(e).hostname.split(".");
     return t[0].indexOf("www") > -1 ? t[1] : t[0]
+}
+function generateFilenameFromUrl(url) {
+    try {
+        // Remove protocol and clean the URL for use as filename
+        var cleanUrl = url.replace(/^https?:\/\//, '')  // Remove http:// or https://
+                          .replace(/\/$/, '')            // Remove trailing slash
+                          .replace(/[<>:"/\\|?*]/g, '_') // Replace invalid filename characters
+                          .replace(/\s+/g, '_');      // Replace spaces with underscores
+        return cleanUrl || 'scraped_data';
+    } catch (e) {
+        return 'scraped_data';
+    }
 }
 function E(e) {
     var t = function(t) {
@@ -527,6 +542,12 @@ function T() {
             selector: s.nextSelector
         }, function(t) {
             if (t && t.error) {
+                // Check if scraping finished naturally (no more pages)
+                if (t.error.includes("No more next buttons") || t.error.includes("Finished crawling")) {
+                    // Scraping finished naturally, trigger auto-download if enabled
+                    L(); // Call stop scraping function which handles auto-download
+                    return;
+                }
                 p("", "instructions"), p(t.error, t.errorId || "error", !0);
             }
         });
@@ -551,9 +572,16 @@ function T() {
                 action: "clickNext",
                 selector: s.nextSelector
             }, function(t) {
-                if (t && t.error)
+                if (t && t.error) {
+                    // Check if scraping finished naturally (no more pages)
+                    if (t.error.includes("No more next buttons") || t.error.includes("Finished crawling")) {
+                        // Scraping finished naturally, trigger auto-download if enabled
+                        L(); // Call stop scraping function which handles auto-download
+                        return;
+                    }
                     return p("", "instructions"),
                     p(t.error, t.errorId, !0);
+                }
                 $("#wrongTable").hide(),
                 e()
             })
@@ -571,9 +599,16 @@ function T() {
                 selector: s.tableSelector
             }, function(e) {
                 if (e) {
-                    if (e.error)
+                    if (e.error) {
+                        // Check if scraping finished naturally (no more pages)
+                        if (e.error.includes("No more next buttons") || e.error.includes("Finished crawling")) {
+                            // Scraping finished naturally, trigger auto-download if enabled
+                            L(); // Call stop scraping function which handles auto-download
+                            return;
+                        }
                         return p("", "instructions"),
                         p(e.error, e.errorId || "error", !0);
+                    }
                     e.failedToProcess ? (p("Failed to process rows. Showing raw data instead.", "error", !1),
                     s.failedToProcess = !0,
                     s.processingError = e.processingError) : ($("#error").hide(),
@@ -597,6 +632,11 @@ function T() {
 }
 function I() {
     $("#stopScraping").click(L),
+    // Handle auto-download CSV checkbox
+    $("#autoDownloadCSV").change(function() {
+        s.config.autoDownloadCSV = $(this).is(':checked');
+        S(); // Save config to localStorage
+    }),
     $("#crawlDelay").bind("propertychange change click keyup input paste", function() {
         var e = $(this).val();
         if (isNaN(e) || e < 0 || parseInt(1e3 * e) >= s.config.maxWait)
@@ -629,12 +669,17 @@ function I() {
         S()
     })
 }
-function L(e=null) {
+function L(e) {
+    e = e || null,
     s.scraping = !1,
     console.log("Scraping stopped."),
     $("#startScraping").show(),
     $("#stopScraping").hide(),
-    p("Crawling stopped. Please download data or continue crawling.", "instructions")
+    s.config && s.config.autoDownloadCSV ? (console.log("Auto-downloading CSV..."),
+    setTimeout(function() {
+        $("#csv").click()
+    }, 500),
+    p("Crawling stopped. CSV file downloaded automatically.", "instructions")) : p("Crawling stopped. Please download data or continue crawling.", "instructions")
 }
 function O() {
     $("#pleaseRate").show(),

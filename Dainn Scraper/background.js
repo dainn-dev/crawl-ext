@@ -2,7 +2,7 @@
 
 chrome.action.onClicked.addListener(function(activeTab){
   var targetUrl = chrome.runtime.getURL(
-    "popup.html?tabid=" + encodeURIComponent(activeTab.id) +
+    "index.html?tabid=" + encodeURIComponent(activeTab.id) +
     "&url=" + encodeURIComponent(activeTab.url)
   );
   chrome.windows.create({

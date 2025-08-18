@@ -129,7 +129,7 @@ var i = {
     url: u("url")
 }
   , s = {}
-  , c = 1e3
+  , c = Infinity  // No row limit - show all scraped data
   , l = null;
 async function d() {
     null !== i.url.toLowerCase().match(/\/\/[a-z]+\.linkedin\.com/) ? ($("#waitHeader").hide(),
@@ -300,11 +300,16 @@ function b() {
 }
 function v() {
     var e = h(s.data);
-    e.data = e.data.slice(0, c),
+    // Remove data slicing - show all rows
     s.previewLength = e.data.length;
     
+    // Performance warning for very large datasets
+    if (e.data.length > 10000) {
+        console.warn(`⚠️ Large dataset detected: ${e.data.length} rows. Consider downloading data for better performance.`);
+    }
+    
     // Set pagination to last page when new data is loaded (show most recent data)
-    const recordsPerPage = 10;
+    const recordsPerPage = 50; // Increased from 10 to 50
     const totalRecords = e.data.length;
     const totalPages = Math.ceil(totalRecords / recordsPerPage);
     window.currentPage = totalPages > 0 ? totalPages : 1;
@@ -337,8 +342,8 @@ function generateModernTable(e) {
         return;
     }
     
-    // Pagination settings
-    const recordsPerPage = 10;
+    // Pagination settings - increased page size for better performance with large datasets
+    const recordsPerPage = 50; // Increased from 10 to 50
     const totalRecords = data.length;
     const totalPages = Math.ceil(totalRecords / recordsPerPage);
     
@@ -354,9 +359,22 @@ function generateModernTable(e) {
     
     let tableHtml = `
         <div class="table-container">
-            <table class="w-full resizable-table">
-                <thead class="bg-gray-50">
-                    <tr>`;
+            <div class="table-scroll-container relative">
+                <!-- Scroll shadow indicators -->
+                <div class="scroll-shadow-left hidden"></div>
+                <div class="scroll-shadow-right"></div>
+                
+                <!-- Scroll indicators -->
+                <div class="scroll-indicator left" title="Scroll left">
+                    <i class="fas fa-chevron-left"></i>
+                </div>
+                <div class="scroll-indicator right" title="Scroll right">
+                    <i class="fas fa-chevron-right"></i>
+                </div>
+                
+                <table class="w-full resizable-table">
+                    <thead class="bg-gray-50">
+                        <tr>`;
     
     // Generate headers
     headers.forEach((header, index) => {
@@ -451,7 +469,8 @@ function generateModernTable(e) {
     
     tableHtml += `
                 </tbody>
-            </table>`;
+            </table>
+        </div>`;
     
     // Add pagination controls
     if (totalPages > 1) {
@@ -494,12 +513,12 @@ function generateModernTable(e) {
     
     // Add footer with statistics
     const totalRows = s.data ? s.data.length : 0;
-    const previewRows = data.length;
     
-    if (previewRows < totalRows) {
+    // Show total rows count
+    if (totalRows > 0) {
         tableHtml += `
         <div class="p-4 border-t bg-gray-50">
-            <p class="text-sm text-gray-600 text-center">Showing first ${previewRows} rows of ${totalRows} total rows</p>
+            <p class="text-sm text-gray-600 text-center">Showing all ${totalRows} rows</p>
         </div>`;
     }
     
@@ -690,6 +709,112 @@ function applySmartColumnWidths() {
     });
 }
 
+// Function to add horizontal scroll handlers
+function addHorizontalScrollHandlers() {
+    const scrollContainer = $('.table-scroll-container');
+    if (scrollContainer.length === 0) return;
+    
+    // Handle scroll indicator clicks
+    $(document).off('click', '.scroll-indicator.left').on('click', '.scroll-indicator.left', function(e) {
+        e.stopPropagation();
+        const container = $(this).closest('.table-scroll-container');
+        const currentScroll = container.scrollLeft();
+        container.animate({
+            scrollLeft: currentScroll - 300
+        }, 300);
+    });
+    
+    $(document).off('click', '.scroll-indicator.right').on('click', '.scroll-indicator.right', function(e) {
+        e.stopPropagation();
+        const container = $(this).closest('.table-scroll-container');
+        const currentScroll = container.scrollLeft();
+        container.animate({
+            scrollLeft: currentScroll + 300
+        }, 300);
+    });
+    
+    // Handle scroll events to update shadow indicators
+    scrollContainer.off('scroll').on('scroll', function() {
+        const container = $(this);
+        const scrollLeft = container.scrollLeft();
+        const scrollWidth = container[0].scrollWidth;
+        const clientWidth = container[0].clientWidth;
+        
+        // Update left shadow
+        const leftShadow = container.find('.scroll-shadow-left');
+        if (scrollLeft > 0) {
+            leftShadow.removeClass('hidden');
+        } else {
+            leftShadow.addClass('hidden');
+        }
+        
+        // Update right shadow
+        const rightShadow = container.find('.scroll-shadow-right');
+        if (scrollLeft < scrollWidth - clientWidth - 1) {
+            rightShadow.removeClass('hidden');
+        } else {
+            rightShadow.addClass('hidden');
+        }
+        
+        // Update scroll indicators visibility
+        const leftIndicator = container.find('.scroll-indicator.left');
+        const rightIndicator = container.find('.scroll-indicator.right');
+        
+        if (scrollLeft > 0) {
+            leftIndicator.show();
+        } else {
+            leftIndicator.hide();
+        }
+        
+        if (scrollLeft < scrollWidth - clientWidth - 1) {
+            rightIndicator.show();
+        } else {
+            rightIndicator.hide();
+        }
+    });
+    
+    // Trigger initial scroll event to set up shadows
+    scrollContainer.trigger('scroll');
+    
+    // Add keyboard navigation
+    scrollContainer.off('keydown').on('keydown', function(e) {
+        const container = $(this);
+        const currentScroll = container.scrollLeft();
+        
+        switch(e.key) {
+            case 'ArrowLeft':
+                e.preventDefault();
+                container.animate({
+                    scrollLeft: currentScroll - 100
+                }, 200);
+                break;
+            case 'ArrowRight':
+                e.preventDefault();
+                container.animate({
+                    scrollLeft: currentScroll + 100
+                }, 200);
+                break;
+            case 'Home':
+                e.preventDefault();
+                container.animate({
+                    scrollLeft: 0
+                }, 300);
+                break;
+            case 'End':
+                e.preventDefault();
+                const scrollWidth = container[0].scrollWidth;
+                const clientWidth = container[0].clientWidth;
+                container.animate({
+                    scrollLeft: scrollWidth - clientWidth
+                }, 300);
+                break;
+        }
+    });
+    
+    // Make container focusable for keyboard navigation
+    scrollContainer.attr('tabindex', '0');
+}
+
 // Helper function to escape HTML
 function escapeHtml(text) {
     if (!text) return '';
@@ -877,6 +1002,9 @@ function addModernTableEventListeners() {
             console.log('Button disabled or no page data:', newPage, $(this).prop('disabled'));
         }
     });
+    
+    // Add horizontal scroll functionality
+    addHorizontalScrollHandlers();
 }
 
 function addColumnResizing() {
@@ -1149,6 +1277,9 @@ function x(e, t) {
     s.config.infinateScrollChecked && ($("#nextSelectorGroup").hide(),
     $("#startScraping").show(),
     $("#infinateScroll").prop("checked", !0)),
+    
+    // Update page title with startingUrl when data is loaded
+    (typeof window.updatePageTitle === 'function') && window.updatePageTitle(),
     chrome.tabs.sendMessage(i.id, {
         action: "getTableData"
     }, function(e) {
@@ -1361,8 +1492,22 @@ function T() {
                     t = new Date,
                     D(e.data),
                     q(),
-                    s.previewLength < c ? v() : p("Preview limited to 1000 rows.", "previewLimit"),
-                    s.scraping && n()
+                    v(), // Always update table - no row limit
+                    
+                    // Check if next page exists before continuing
+                    (s.scraping && (function() {
+                        checkNextPageExists(function(nextPageExists) {
+                            if (nextPageExists) {
+                                // Continue scraping
+                                n();
+                            } else {
+                                // No more pages, stop scraping automatically
+                                console.log('🏁 No more pages found - stopping scraping automatically');
+                                p("Reached the last page. Scraping stopped automatically.", "instructions");
+                                L(); // Stop scraping
+                            }
+                        });
+                    }()))
                 }
             })
         }, i.id, (s.config && s.config.maxWait) || 20000, 100, (s.config && s.config.crawlDelay) || 1000, function(e) {
@@ -1525,13 +1670,8 @@ function updateModernStats(statsData) {
         const formattedTime = formatWorkingTime(statsData.workingTime);
         statsContainer.find('.text-2xl.font-bold.text-purple-600, .text-3xl.font-bold.text-purple-600').text(formattedTime);
         
-        // Update status badge based on scraping state
-        const statusBadge = statsContainer.parent().find('.bg-green-100');
-        if (s.scraping) {
-            statusBadge.removeClass('bg-green-100 text-green-800').addClass('bg-blue-100 text-blue-800').text('Scraping...');
-        } else {
-            statusBadge.removeClass('bg-blue-100 text-blue-800').addClass('bg-green-100 text-green-800').text('Ready');
-        }
+        // Update status badge with next page information
+        updateStatusBadgeWithNextPage();
     }
     
     // Update crawl history progress if function is available
@@ -1598,6 +1738,11 @@ $("#wrongTable").click(function() {
     chrome.tabs.sendMessage(i.id, {
         action: "nextTable"
     }, x)
+    
+    // Update page title when switching to a different table
+    if (typeof window.updatePageTitle === 'function') {
+        window.updatePageTitle();
+    }
 }),
 $("#nextSelectorInput").on("input", function() {
     const t = $(this).val().trim();
@@ -1654,6 +1799,11 @@ $("#startScraping").click(function(e) {
     if (typeof addCrawlHistoryItem === 'function' && i && i.url) {
         currentCrawlId = addCrawlHistoryItem(i.url, i.title || 'Unknown Page');
         console.log('🚀 Started crawl session from popup.js:', currentCrawlId);
+    }
+    
+    // Update page title with startingUrl when scraping starts
+    if (typeof window.updatePageTitle === 'function') {
+        window.updatePageTitle();
     }
     
     T(); // Call the original function
@@ -1762,3 +1912,106 @@ $(document).ready(function() {
     console.log('🔄 Loading extension settings...');
     loadExtensionSettings();
 });
+
+// Function to check if next page exists
+function checkNextPageExists(callback) {
+    console.log('🔍 Checking if next page exists...');
+    
+    // If infinite scroll is enabled, always assume there's more content
+    if (C()) {
+        console.log('✅ Infinite scroll enabled - assuming next page exists');
+        callback(true);
+        return;
+    }
+    
+    // If no next selector is configured, no next page
+    if (!s.nextSelector) {
+        console.log('❌ No next selector configured - no next page');
+        callback(false);
+        return;
+    }
+    
+    // Check if next button/link exists on the current page
+    chrome.tabs.sendMessage(i.id, {
+        action: "checkNextPageExists",
+        selector: s.nextSelector
+    }, function(response) {
+        if (chrome.runtime.lastError) {
+            console.error('❌ Error checking next page:', chrome.runtime.lastError);
+            callback(false);
+            return;
+        }
+        
+        if (response && response.exists) {
+            console.log('✅ Next page exists');
+            callback(true);
+        } else {
+            console.log('❌ No next page found');
+            callback(false);
+        }
+    });
+}
+
+// Function to update status badge with next page information
+function updateStatusBadgeWithNextPage() {
+    checkNextPageExists(function(nextPageExists) {
+        // Update status badge based on scraping state and next page availability
+        const statusBadge = $('.bg-green-100, .bg-blue-100, .bg-yellow-100, .bg-red-100');
+        
+        if (statusBadge.length > 0) {
+            if (s.scraping) {
+                if (nextPageExists) {
+                    // Scraping with more pages available
+                    statusBadge.removeClass('bg-green-100 text-green-800 bg-yellow-100 text-yellow-800 bg-red-100 text-red-800')
+                              .addClass('bg-blue-100 text-blue-800')
+                              .text('Scraping...');
+                } else {
+                    // Scraping but no more pages
+                    statusBadge.removeClass('bg-blue-100 text-blue-800 bg-red-100 text-red-800')
+                            .addClass('bg-green-100 text-green-800')
+                            .text('Completed');
+                }
+            } else {
+                if (nextPageExists) {
+                    // Ready with more pages available
+                    statusBadge.removeClass('bg-blue-100 text-blue-800 bg-yellow-100 text-yellow-800 bg-red-100 text-red-800')
+                              .addClass('bg-green-100 text-green-800')
+                              .text('Ready');
+                } else {
+                    // Ready but no more pages
+                    statusBadge.removeClass('bg-blue-100 text-blue-800 bg-green-100 text-green-800 bg-red-100 text-red-800')
+                              .addClass('bg-yellow-100 text-yellow-800')
+                              .text('No More Pages');
+                }
+            }
+        }
+        
+        // Also update the status text in instructions area
+        updateStatusText(nextPageExists);
+    });
+}
+
+// Function to update status text
+function updateStatusText(nextPageExists) {
+    let statusText = '';
+    
+    if (s.scraping) {
+        if (nextPageExists) {
+            statusText = 'Please wait for more pages or press "Stop crawling".';
+        } else {
+            statusText = 'Reached the last page. Scraping will stop automatically.';
+        }
+    } else {
+        if (nextPageExists) {
+            statusText = 'Download data or locate "Next" to crawl multiple pages';
+        } else {
+            statusText = 'No more pages available. Download your data.';
+        }
+    }
+    
+    // Update instructions text
+    p(statusText, "instructions");
+}
+
+// Make horizontal scroll handlers globally accessible
+window.addHorizontalScrollHandlers = addHorizontalScrollHandlers;

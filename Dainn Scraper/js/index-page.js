@@ -8,6 +8,92 @@
 		return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 	}
 
+	// Helper function to get current tab ID
+	function getCurrentTabId() {
+		// Try to get tab ID from URL parameters first
+		const urlParams = new URLSearchParams(window.location.search);
+		const tabId = urlParams.get('tabid');
+		if (tabId) {
+			return parseInt(tabId);
+		}
+
+		// Fallback: try to get from chrome.tabs API
+		if (typeof chrome !== 'undefined' && chrome.tabs) {
+			return new Promise((resolve) => {
+				chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+					if (tabs[0]) {
+						resolve(tabs[0].id);
+					} else {
+						resolve(null);
+					}
+				});
+			});
+		}
+
+		return null;
+	}
+
+	// Function to update page title with startingUrl
+	function updatePageTitle(tabId = null) {
+		const titleElement = document.querySelector('title');
+		if (!titleElement) {
+			console.log('Title element not found');
+			return;
+		}
+
+		// Get startingUrl from global variables if available
+		if (typeof window.s !== 'undefined' && window.s.startingUrl) {
+			const startingUrl = window.s.startingUrl;
+			titleElement.textContent = `Dainn Scraper - ${startingUrl}`;
+			console.log('✅ Updated title with startingUrl from global s:', startingUrl);
+			return;
+		}
+
+		// If no global startingUrl, try to get from tab
+		if (typeof chrome !== 'undefined' && chrome.tabs) {
+			const query = tabId ? { tabIds: [tabId] } : { active: true, currentWindow: true };
+
+			chrome.tabs.query(query, function (tabs) {
+				if (tabs[0] && tabs[0].url) {
+					try {
+						const url = new URL(tabs[0].url);
+
+						// Check if this is a chrome extension URL and extract the actual URL parameter
+						if (url.protocol === 'chrome-extension:') {
+							const urlParam = url.searchParams.get('url');
+							if (urlParam) {
+								// Decode the URL parameter to get the actual target URL
+								const decodedUrl = decodeURIComponent(urlParam);
+								titleElement.textContent = `Dainn Scraper - ${decodedUrl}`;
+								console.log('✅ Updated title with decoded URL parameter:', decodedUrl);
+							} else {
+								titleElement.textContent = `Dainn Scraper - ${url.hostname}`;
+								console.log('✅ Updated title with hostname:', url.hostname);
+							}
+						} else {
+							// Regular URL (not chrome extension)
+							const hostname = url.hostname;
+							const pathname = url.pathname.length > 30 ? url.pathname.substring(0, 30) + '...' : url.pathname;
+							const fullUrl = hostname + pathname;
+							titleElement.textContent = `Dainn Scraper - ${fullUrl}`;
+							console.log('✅ Updated title with regular URL:', fullUrl);
+						}
+					} catch (e) {
+						titleElement.textContent = `Dainn Scraper - ${tabs[0].url}`;
+						console.log('✅ Updated title with raw URL:', tabs[0].url);
+					}
+				} else {
+					titleElement.textContent = 'Dainn Scraper';
+					console.log('✅ Updated title to default');
+				}
+			});
+		} else {
+			// Fallback for when chrome.tabs is not available
+			titleElement.textContent = 'Dainn Scraper';
+			console.log('✅ Updated title to default (no chrome.tabs)');
+		}
+	}
+
 	// Hide loading overlay once page is fully loaded
 	window.addEventListener('load', function () {
 		const loadingOverlay = document.getElementById('loadingOverlay');
@@ -18,6 +104,9 @@
 				loadingOverlay.style.display = 'none';
 			}, 500);
 		}, 800);
+
+		// Update page title with current URL
+		updatePageTitle();
 	});
 
 	// Get DOM elements
@@ -176,22 +265,27 @@
 		// Show stop button, hide start button
 		startScrapingBtn.classList.add('hidden');
 		stopScrapingBtn.classList.remove('hidden');
-		
-		// Update status badge to "Scraping..."
+
+		// Update status badge to "Scraping..." and check next page existence
 		updateStatusBadge('scraping');
 		
+		// Check next page existence after a short delay
+		setTimeout(() => {
+			updateStatusBadgeWithNextPage();
+		}, 500);
+
 		// Get current URL - try different methods to get the page URL
 		let currentUrl = 'Unknown URL';
 		let pageTitle = 'Unknown Page';
-		
+
 		// Try to get URL from Chrome tabs API if available
 		if (typeof chrome !== 'undefined' && chrome.tabs) {
-			chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+			chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
 				if (tabs[0]) {
 					currentUrl = tabs[0].url;
 					pageTitle = tabs[0].title || 'Unknown Page';
 				}
-				
+
 				// Add crawl history item
 				currentCrawlId = addCrawlHistoryItem(currentUrl, pageTitle);
 				console.log('🚀 Started crawl session:', currentCrawlId);
@@ -204,90 +298,241 @@
 			} catch (e) {
 				console.log('Could not get current URL, using fallback');
 			}
-			
+
 			// Add crawl history item
 			currentCrawlId = addCrawlHistoryItem(currentUrl, pageTitle);
 			console.log('🚀 Started crawl session:', currentCrawlId);
 		}
-		
+
 		// Show notification
 		showScrapingNotification('Scraping started - added to crawl history', 'info');
-		
+
 		console.log('Start scraping clicked');
 		// Here you would integrate with the actual scraping functionality from popup.js
 	}
-	
+
 	function handleStopScraping() {
 		// Show start button, hide stop button
 		stopScrapingBtn.classList.add('hidden');
 		startScrapingBtn.classList.remove('hidden');
-		
-		// Update status badge to "Ready"
+
+		// Update status badge to "Ready" and check next page existence
 		updateStatusBadge('ready');
 		
+		// Check next page existence after a short delay
+		setTimeout(() => {
+			updateStatusBadgeWithNextPage();
+		}, 500);
+
 		// Update crawl history item if we have a current crawl
 		if (currentCrawlId) {
-			
+
 			// Get item count from the stats or table data
 			let itemCount = getScrapedItemCount();
 			updateCrawlHistoryItem(currentCrawlId, itemCount, 'completed');
 			console.log('🏁 Completed crawl session:', currentCrawlId, 'with', itemCount, 'items');
 			currentCrawlId = null; // Reset current crawl ID
 		}
-		
+
 		// Show notification
 		showScrapingNotification('Scraping stopped - history updated', 'warning');
-		
+
 		console.log('Stop scraping clicked');
 		// Here you would integrate with the actual stop functionality from popup.js
 	}
-	
-	function updateStatusBadge(status) {
-		const statusBadge = document.querySelector('.bg-green-100, .bg-blue-100');
-		if (statusBadge) {
-			if (status === 'scraping') {
-				statusBadge.className = 'bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-xs font-medium mr-2';
-				statusBadge.textContent = 'Scraping...';
-			} else {
-				statusBadge.className = 'bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs font-medium mr-2';
-				statusBadge.textContent = 'Ready';
-			}
+
+	// Function to update status badge with next page information
+	function updateStatusBadgeWithNextPage() {
+		console.log('🔍 Updating status badge with next page information...');
+		
+		// Get current next selector value
+		const nextSelectorValue = nextSelectorInput ? nextSelectorInput.value.trim() : '';
+		
+		if (!nextSelectorValue) {
+			// No selector configured
+			console.log('ℹ️ No next selector configured');
+			updateStatusBadge('no-pages');
+			return;
+		}
+		
+		// Check if infinite scroll is enabled
+		const paginationInfinite = document.getElementById('paginationInfinite');
+		if (paginationInfinite && paginationInfinite.checked) {
+			console.log('✅ Infinite scroll enabled - assuming next page exists');
+			updateStatusBadge('ready');
+			return;
+		}
+		
+		// Check if we're in extension context and can communicate with content script
+		if (typeof chrome !== 'undefined' && chrome.tabs) {
+			chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+				if (chrome.runtime.lastError) {
+					console.error('❌ Error querying tabs:', chrome.runtime.lastError);
+					console.error('❌ Error details:', chrome.runtime.lastError.message);
+					// Fallback to basic check
+					updateStatusBadge('ready');
+					return;
+				}
+				
+				if (tabs && tabs[0]) {
+					console.log('🔍 Checking next page with selector:', nextSelectorValue, 'on tab:', tabs[0].id);
+					
+					// Check if next page exists
+					chrome.tabs.sendMessage(tabs[0].id, {
+						action: "checkNextPageExists",
+						selector: nextSelectorValue
+					}, function (response) {
+						if (chrome.runtime.lastError) {
+							console.error('❌ Error checking next page:', chrome.runtime.lastError);
+							console.error('❌ Error details:', chrome.runtime.lastError.message);
+							// Fallback to basic check - assume ready state
+							console.log('⚠️ Content script communication failed, assuming ready state');
+							updateStatusBadge('ready');
+							return;
+						}
+						
+						console.log('📡 Response from content script:', response);
+						
+						if (response && response.exists) {
+							console.log('✅ Next page exists');
+							updateStatusBadge('ready');
+						} else {
+							console.log('❌ No next page found');
+							updateStatusBadge('no-pages');
+						}
+					});
+				} else {
+					console.error('❌ No active tab found');
+					// Fallback to basic check
+					updateStatusBadge('ready');
+				}
+			});
+		} else {
+			console.error('❌ Chrome tabs API not available');
+			// Fallback to basic check
+			updateStatusBadge('ready');
 		}
 	}
-	
+
+	// Enhanced function to update status badge
+	function updateStatusBadge(status) {
+		console.log('🔍 Updating status badge to:', status);
+		
+		const statusBadge = document.querySelector('.bg-green-100, .bg-blue-100, .bg-yellow-100, .bg-red-100');
+		if (statusBadge) {
+			// Remove all possible status classes
+			statusBadge.classList.remove('bg-green-100', 'text-green-800', 'bg-blue-100', 'text-blue-800', 'bg-yellow-100', 'text-yellow-800', 'bg-red-100', 'text-red-800');
+			
+			switch (status) {
+				case 'scraping':
+					statusBadge.classList.add('bg-blue-100', 'text-blue-800');
+					statusBadge.textContent = 'Scraping...';
+					break;
+				case 'ready':
+					statusBadge.classList.add('bg-green-100', 'text-green-800');
+					statusBadge.textContent = 'Ready';
+					break;
+				case 'no-pages':
+					statusBadge.classList.add('bg-yellow-100', 'text-yellow-800');
+					statusBadge.textContent = 'No More Pages';
+					break;
+				case 'error':
+					statusBadge.classList.add('bg-red-100', 'text-red-800');
+					statusBadge.textContent = 'Error';
+					break;
+				// case 'last-page':
+				// 	statusBadge.classList.add('bg-green-100', 'text-green-800');
+				// 	statusBadge.textContent = 'Completed';
+				// 	break;
+				default:
+					statusBadge.classList.add('bg-green-100', 'text-green-800');
+					statusBadge.textContent = 'Ready';
+			}
+		}
+		
+		// Update status text based on status
+		updateStatusText(status);
+	}
+
+	// Enhanced function to update status text
+	function updateStatusText(status) {
+		let statusText = '';
+		
+		switch (status) {
+			case 'scraping':
+				statusText = 'Please wait for more pages or press "Stop crawling".';
+				break;
+			case 'ready':
+				statusText = 'Download data or locate "Next" to crawl multiple pages';
+				break;
+			case 'no-pages':
+				statusText = 'No more pages available. Download your data.';
+				break;
+			case 'error':
+				statusText = 'Error occurred. Please check your configuration.';
+				break;
+			case 'last-page':
+				statusText = 'Reached the last page. Scraping will stop automatically.';
+				break;
+			default:
+				statusText = 'Ready to start scraping.';
+		}
+		
+		// Update instructions text if available
+		const instructionsElement = document.getElementById('instructions');
+		if (instructionsElement) {
+			instructionsElement.textContent = statusText;
+		}
+		
+		// Also show notification for important status changes
+		if (status === 'no-pages' || status === 'last-page') {
+			showScrapingNotification(statusText, status === 'no-pages' ? 'warning' : 'info');
+		}
+	}
+
 	// Function to handle "Use selector" functionality
 	function handleUseSelectorClick() {
 		console.log('🔍 Use selector clicked');
-		
+
 		const selectorValue = nextSelectorInput ? nextSelectorInput.value.trim() : '';
-		
+
 		if (!selectorValue) {
 			// No selector value, activate element picker mode
 			console.log('🔍 No selector value, activating element picker');
 			showScrapingNotification('Click on the "Next" button or link on the webpage', 'info');
-			
+
 			// Check if we're in extension context and can communicate with content script
 			if (typeof chrome !== 'undefined' && chrome.tabs) {
 				// Get current active tab
-				chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+				chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
 					if (tabs[0]) {
 						console.log('🔍 Sending getNextButton message to tab:', tabs[0].id);
-						chrome.tabs.sendMessage(tabs[0].id, { action: "getNextButton" }, function(response) {
+						chrome.tabs.sendMessage(tabs[0].id, { action: "getNextButton" }, function (response) {
 							if (chrome.runtime.lastError) {
 								console.error('❌ Error communicating with content script:', chrome.runtime.lastError);
 								showScrapingNotification('Error: Could not activate element picker. Make sure you are on the page you want to scrape.', 'error');
 								return;
 							}
-							
+
 							if (response && response.selector) {
 								console.log('✅ Got selector from content script:', response.selector);
-								nextSelectorInput.value = response.selector;
-								showScrapingNotification('Selector captured: ' + response.selector, 'success');
-								
+								if (nextSelectorInput) {
+									nextSelectorInput.value = response.selector;
+									showScrapingNotification('Selector captured: ' + response.selector, 'success');
+									
+									// Check if next page exists with the new selector
+									setTimeout(() => {
+										updateStatusBadgeWithNextPage();
+									}, 1000);
+								}
+								else {
+									console.error('❌ nextSelectorInput element not found');
+									showScrapingNotification('Error: Input field not found', 'error');
+								}
 								// Mark the next button visually
-								chrome.tabs.sendMessage(tabs[0].id, { 
-									action: "markNextButton", 
-									selector: response.selector 
+								chrome.tabs.sendMessage(tabs[0].id, {
+									action: "markNextButton",
+									selector: response.selector
 								});
 							} else {
 								console.log('❌ No selector received from content script');
@@ -307,27 +552,27 @@
 			// Selector value exists, validate it
 			console.log('🔍 Validating selector:', selectorValue);
 			showScrapingNotification('Validating selector: ' + selectorValue, 'info');
-			
+
 			if (typeof chrome !== 'undefined' && chrome.tabs) {
-				chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
+				chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
 					if (tabs[0]) {
 						chrome.tabs.sendMessage(tabs[0].id, {
 							action: "markNextButton",
 							selector: selectorValue
-						}, function(response) {
+						}, function (response) {
 							if (chrome.runtime.lastError) {
 								console.error('❌ Error validating selector:', chrome.runtime.lastError);
 								showScrapingNotification('Error validating selector', 'error');
 								return;
 							}
-							
+
 							if (response && response.error) {
 								console.error('❌ Selector validation failed:', response.error);
 								showScrapingNotification('Selector validation failed: ' + response.error, 'error');
 							} else {
 								console.log('✅ Selector validated successfully');
 								showScrapingNotification('Selector validated successfully!', 'success');
-								
+
 								// Store the selector for future use
 								if (typeof localStorage !== 'undefined') {
 									localStorage.setItem('nextSelector', selectorValue);
@@ -342,7 +587,7 @@
 			}
 		}
 	}
-	
+
 	function showScrapingNotification(message, type = 'info') {
 		const colors = {
 			info: 'bg-blue-100 border-blue-400 text-blue-700',
@@ -350,14 +595,14 @@
 			warning: 'bg-yellow-100 border-yellow-400 text-yellow-700',
 			error: 'bg-red-100 border-red-400 text-red-700'
 		};
-		
+
 		const icons = {
 			info: 'fas fa-info-circle',
 			success: 'fas fa-check-circle',
 			warning: 'fas fa-exclamation-triangle',
 			error: 'fas fa-exclamation-circle'
 		};
-		
+
 		const notification = document.createElement('div');
 		notification.className = `fixed top-4 right-4 ${colors[type]} px-4 py-3 rounded shadow-lg z-50 scraping-notification`;
 		notification.innerHTML = `
@@ -369,9 +614,9 @@
 				</button>
 			</div>
 		`;
-		
+
 		document.body.appendChild(notification);
-		
+
 		setTimeout(() => {
 			notification.style.opacity = '0';
 			notification.style.transition = 'opacity 0.3s ease-out';
@@ -382,20 +627,20 @@
 			}, 300);
 		}, 3000);
 	}
-	
+
 	// Crawl History Management Functions
 	function addCrawlHistoryItem(url, pageTitle = '') {
 		console.log('📝 Adding crawl history item:', url);
-		
+
 		const historyContainer = document.querySelector('#sidebarMenu .space-y-3');
 		if (!historyContainer) {
 			console.error('❌ Crawl history container not found');
 			return null;
 		}
-		
+
 		// Generate unique ID for this crawl session
 		const crawlId = 'crawl_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-		
+
 		// Get domain and display URL
 		let domain;
 		let displayUrl = url;
@@ -410,16 +655,16 @@
 			displayUrl = url.length > 60 ? url.substring(0, 57) + '...' : url;
 			displayUrl = decodeURIComponent(displayUrl);
 		}
-		
+
 		// Create the history item
 		const historyItem = document.createElement('div');
 		historyItem.className = 'p-3 bg-gray-50 rounded-lg';
 		historyItem.setAttribute('data-crawl-id', crawlId);
-		
+
 		const currentDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-		
-								const decodedUrl = decodeURIComponent(url);
-		
+
+		const decodedUrl = decodeURIComponent(url);
+
 		historyItem.innerHTML = `
 			<div class="flex items-start justify-between">
 				<div class="flex-1">
@@ -434,10 +679,10 @@
 						</button>
 					</div>
 				`;
-		
+
 		// Add to the top of the history (most recent first)
 		historyContainer.insertBefore(historyItem, historyContainer.firstChild);
-		
+
 		// Store crawl session data
 		const crawlData = {
 			id: crawlId,
@@ -449,59 +694,59 @@
 			status: 'crawling',
 			itemCount: 0
 		};
-		
+
 		// Save to storage
 		saveCrawlToHistory(crawlData);
-		
+
 		console.log('✅ Crawl history item added:', crawlData);
 		return crawlId;
 	}
-	
+
 	function updateCrawlHistoryItem(crawlId, itemCount, status = 'completed') {
 		console.log('📊 Updating crawl history item:', crawlId, 'Items:', itemCount, 'Status:', status);
-		
+
 		const historyItem = document.querySelector(`[data-crawl-id="${crawlId}"]`);
 		if (!historyItem) {
 			console.error('❌ Crawl history item not found:', crawlId);
 			return;
 		}
-		
+
 		const statusElement = historyItem.querySelector('.crawl-status');
 		if (statusElement) {
 			statusElement.className = 'text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded crawl-status';
 			statusElement.textContent = `${itemCount} items`;
 		}
-		
+
 		// Update stored data
-		updateCrawlInHistory(crawlId, { 
-			itemCount: itemCount, 
+		updateCrawlInHistory(crawlId, {
+			itemCount: itemCount,
 			status: status,
 			endTime: new Date().toISOString()
 		});
-		
+
 		console.log('✅ Crawl history item updated successfully');
 	}
-	
+
 	function saveCrawlToHistory(crawlData) {
 		console.log('💾 Saving crawl to Chrome storage:', crawlData);
-		
+
 		if (chrome && chrome.storage && chrome.storage.sync) {
 			// Save to Chrome storage for cross-device sync
-			chrome.storage.sync.get(['crawlHistory'], function(result) {
+			chrome.storage.sync.get(['crawlHistory'], function (result) {
 				if (chrome.runtime.lastError) {
 					console.error('❌ Error reading from Chrome storage:', chrome.runtime.lastError);
 					// Fallback to localStorage
 					saveToLocalStorage(crawlData);
 					return;
 				}
-				
+
 				const existingHistory = result.crawlHistory || [];
 				existingHistory.unshift(crawlData); // Add to beginning
-				
+
 				// Keep only last 50 items
 				const limitedHistory = existingHistory.slice(0, 50);
-				
-				chrome.storage.sync.set({ 'crawlHistory': limitedHistory }, function() {
+
+				chrome.storage.sync.set({ 'crawlHistory': limitedHistory }, function () {
 					if (chrome.runtime.lastError) {
 						console.error('❌ Error saving to Chrome storage:', chrome.runtime.lastError);
 						// Fallback to localStorage
@@ -516,43 +761,43 @@
 			saveToLocalStorage(crawlData);
 		}
 	}
-	
+
 	function saveToLocalStorage(crawlData) {
 		if (typeof localStorage !== 'undefined') {
 			try {
 				const existingHistory = JSON.parse(localStorage.getItem('crawlHistory') || '[]');
 				existingHistory.unshift(crawlData); // Add to beginning
-				
+
 				// Keep only last 50 items
 				const limitedHistory = existingHistory.slice(0, 50);
 				localStorage.setItem('crawlHistory', JSON.stringify(limitedHistory));
-				
+
 				console.log('💾 Crawl saved to localStorage history (fallback)');
 			} catch (e) {
 				console.error('❌ Error saving crawl to localStorage:', e);
 			}
 		}
 	}
-	
+
 	function updateCrawlInHistory(crawlId, updateData) {
 		console.log('💾 Updating crawl in Chrome storage:', crawlId, updateData);
-		
+
 		if (chrome && chrome.storage && chrome.storage.sync) {
-			chrome.storage.sync.get(['crawlHistory'], function(result) {
+			chrome.storage.sync.get(['crawlHistory'], function (result) {
 				if (chrome.runtime.lastError) {
 					console.error('❌ Error reading from Chrome storage:', chrome.runtime.lastError);
 					// Fallback to localStorage
 					updateInLocalStorage(crawlId, updateData);
 					return;
 				}
-				
+
 				const existingHistory = result.crawlHistory || [];
 				const crawlIndex = existingHistory.findIndex(item => item.id === crawlId);
-				
+
 				if (crawlIndex !== -1) {
 					existingHistory[crawlIndex] = { ...existingHistory[crawlIndex], ...updateData };
-					
-					chrome.storage.sync.set({ 'crawlHistory': existingHistory }, function() {
+
+					chrome.storage.sync.set({ 'crawlHistory': existingHistory }, function () {
 						if (chrome.runtime.lastError) {
 							console.error('❌ Error updating in Chrome storage:', chrome.runtime.lastError);
 							// Fallback to localStorage
@@ -568,13 +813,13 @@
 			updateInLocalStorage(crawlId, updateData);
 		}
 	}
-	
+
 	function updateInLocalStorage(crawlId, updateData) {
 		if (typeof localStorage !== 'undefined') {
 			try {
 				const existingHistory = JSON.parse(localStorage.getItem('crawlHistory') || '[]');
 				const crawlIndex = existingHistory.findIndex(item => item.id === crawlId);
-				
+
 				if (crawlIndex !== -1) {
 					existingHistory[crawlIndex] = { ...existingHistory[crawlIndex], ...updateData };
 					localStorage.setItem('crawlHistory', JSON.stringify(existingHistory));
@@ -585,20 +830,20 @@
 			}
 		}
 	}
-	
+
 	function loadCrawlHistory() {
 		console.log('📖 Loading crawl history from Chrome storage');
-		
+
 		if (chrome && chrome.storage && chrome.storage.sync) {
 			// Load from Chrome storage for cross-device sync
-			chrome.storage.sync.get(['crawlHistory'], function(result) {
+			chrome.storage.sync.get(['crawlHistory'], function (result) {
 				if (chrome.runtime.lastError) {
 					console.error('❌ Error reading from Chrome storage:', chrome.runtime.lastError);
 					// Fallback to localStorage
 					loadFromLocalStorage();
 					return;
 				}
-				
+
 				const historyData = result.crawlHistory || [];
 				renderCrawlHistory(historyData);
 				console.log('✅ Crawl history loaded from Chrome storage:', historyData.length, 'items');
@@ -608,15 +853,15 @@
 			loadFromLocalStorage();
 		}
 	}
-	
+
 	function loadFromLocalStorage() {
 		console.log('📖 Loading crawl history from localStorage (fallback)');
-		
+
 		if (typeof localStorage === 'undefined') {
 			console.log('📖 localStorage not available, skipping history load');
 			return;
 		}
-		
+
 		try {
 			const historyData = JSON.parse(localStorage.getItem('crawlHistory') || '[]');
 			renderCrawlHistory(historyData);
@@ -625,37 +870,37 @@
 			console.error('❌ Error loading crawl history from localStorage:', e);
 		}
 	}
-	
+
 	function renderCrawlHistory(historyData) {
 		const historyContainer = document.querySelector('#crawlHistoryContainer');
-		
+
 		if (!historyContainer) {
 			console.error('❌ History container not found');
 			return;
 		}
-		
+
 		console.log('🔄 Rendering crawl history with', historyData.length, 'items');
-		
+
 		// Clear ALL existing items (both static and dynamic)
 		const allItems = historyContainer.querySelectorAll('div');
 		allItems.forEach(item => item.remove());
-		
+
 		// If no history data, don't add any items
 		if (!historyData || historyData.length === 0) {
 			console.log('📭 No crawl history data to display');
 			return;
 		}
-		
+
 		// Add items from storage
 		historyData.slice(0, 10).forEach(crawlData => { // Show only last 10
 			const historyItem = document.createElement('div');
 			historyItem.className = 'p-3 bg-gray-50 rounded-lg';
 			historyItem.setAttribute('data-crawl-id', crawlData.id);
-			
+
 			const date = new Date(crawlData.startTime).toISOString().split('T')[0];
 			const statusClass = crawlData.status === 'completed' ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800';
 			const statusText = crawlData.status === 'completed' ? `${crawlData.itemCount} items` : 'Crawling...';
-			
+
 			// Use displayUrl if available, otherwise create one from url or fall back to domain
 			let displayText;
 			if (crawlData.displayUrl) {
@@ -666,11 +911,11 @@
 			} else {
 				displayText = crawlData.domain || 'Unknown URL';
 			}
-			
+
 			const urlForLink = crawlData.url || crawlData.domain || '#';
 			const decodedUrlForLink = decodeURIComponent(urlForLink);
 			const decodedTitle = decodeURIComponent(crawlData.url || crawlData.domain || '');
-			
+
 			historyItem.innerHTML = `
 				<div class="flex items-start justify-between">
 					<div class="flex-1">
@@ -685,30 +930,30 @@
 					</button>
 				</div>
 			`;
-			
+
 			console.log('🔧 Generated remove button for crawl ID:', crawlData.id);
 			historyContainer.appendChild(historyItem);
 		});
-		
+
 		console.log('✅ Rendered', historyData.slice(0, 10).length, 'crawl history items');
 	}
-	
+
 	// Global variable to store current crawl ID
 	let currentCrawlId = null;
-	
+
 	// Global function to remove crawl history item (called from onclick)
-	window.removeCrawlHistoryItem = function(crawlId) {
+	window.removeCrawlHistoryItem = function (crawlId) {
 		console.log('🗑️ Global remove function called for:', crawlId);
 		if (crawlId) {
 			// Remove from storage first
 			removeCrawlFromHistory(crawlId);
-			
+
 			// Find and remove the DOM element
 			const historyItem = document.querySelector(`[data-crawl-id="${crawlId}"]`);
 			if (historyItem) {
 				historyItem.remove();
 				console.log('✅ History item removed from DOM via global function');
-				
+
 				// Show success notification
 				showScrapingNotification('Crawl history item removed', 'success');
 			} else {
@@ -716,38 +961,38 @@
 			}
 		}
 	};
-	
+
 	// Test function to verify remove functionality
-	window.testRemoveFunction = function() {
+	window.testRemoveFunction = function () {
 		console.log('🧪 Testing remove functionality...');
 		const removeButtons = document.querySelectorAll('.crawl-history-remove');
 		console.log('🔍 Found remove buttons:', removeButtons.length);
-		
+
 		removeButtons.forEach((button, index) => {
 			const crawlId = button.getAttribute('data-crawl-id');
 			const onclick = button.getAttribute('onclick');
 			console.log(`🔧 Button ${index}: crawlId=${crawlId}, onclick=${onclick}`);
 		});
-		
+
 		// Test if removeCrawlFromHistory function is accessible
 		console.log('🔍 removeCrawlFromHistory function accessible:', typeof window.removeCrawlFromHistory);
 		console.log('🔍 removeCrawlFromHistory function accessible:', typeof removeCrawlFromHistory);
 	};
-	
+
 	// Function to update stats display
 	function updateStatsDisplay() {
 		console.log('📊 Updating stats display...');
-		
+
 		// Get actual item count
 		const itemCount = getScrapedItemCount();
-		
+
 		// Update Items Scraped
 		const itemsScrapedElement = document.querySelector('.text-3xl.font-bold.text-blue-600');
 		if (itemsScrapedElement) {
 			itemsScrapedElement.textContent = itemCount;
 			console.log('✅ Updated Items Scraped to:', itemCount);
 		}
-		
+
 		// Update Pages Crawled (if available)
 		const pagesCrawledElement = document.querySelector('.text-3xl.font-bold.text-green-600');
 		if (pagesCrawledElement) {
@@ -759,7 +1004,7 @@
 			pagesCrawledElement.textContent = pagesCount;
 			console.log('✅ Updated Pages Crawled to:', pagesCount);
 		}
-		
+
 		// Update Working Time (if available)
 		const workingTimeElement = document.querySelector('.text-3xl.font-bold.text-purple-600');
 		if (workingTimeElement) {
@@ -773,18 +1018,18 @@
 			console.log('✅ Updated Working Time to:', workingTime);
 		}
 	}
-	
+
 	// Function to get scraped item count
 	function getScrapedItemCount() {
 		console.log('📊 Getting scraped item count...');
-		
+
 		// Method 1: Check global variables if they exist (from popup.js) - PRIORITY
 		if (typeof window.s !== 'undefined' && window.s.data) {
 			const count = Array.isArray(window.s.data) ? window.s.data.length : 0;
 			console.log('📊 Item count from global s.data:', count);
 			return count;
 		}
-		
+
 		// Method 2: Check for pagination info in the table footer
 		const paginationInfo = document.querySelector('.pagination-controls .text-sm');
 		if (paginationInfo && paginationInfo.textContent) {
@@ -795,7 +1040,7 @@
 				return count;
 			}
 		}
-		
+
 		// Method 3: Check stats section for item count
 		const statsElements = document.querySelectorAll('[class*="text-3xl"], [class*="font-bold"]');
 		for (let element of statsElements) {
@@ -808,7 +1053,7 @@
 				}
 			}
 		}
-		
+
 		// Method 4: Check if there's a table with data (but get total, not just visible rows)
 		const table = document.querySelector('#hot table, .handsontable table');
 		if (table) {
@@ -825,7 +1070,7 @@
 					}
 				}
 			}
-			
+
 			// Fallback: count all data rows (not just visible ones)
 			const allRows = table.querySelectorAll('tbody tr, tr[data-index]');
 			if (allRows.length > 0) {
@@ -833,7 +1078,7 @@
 				return allRows.length;
 			}
 		}
-		
+
 		// Method 5: Check for any element containing total item count
 		const allElements = document.querySelectorAll('*');
 		for (let element of allElements) {
@@ -846,18 +1091,18 @@
 				}
 			}
 		}
-		
+
 		// Method 6: Fallback - estimate based on DOM
 		const dataElements = document.querySelectorAll('[data-row], .data-row, tr[data-index]');
 		if (dataElements.length > 0) {
 			console.log('📊 Item count from data elements:', dataElements.length);
 			return dataElements.length;
 		}
-		
+
 		console.log('📊 Item count fallback: 0');
 		return 0;
 	}
-	
+
 	// Function to load saved next selector
 	function loadSavedNextSelector() {
 		if (nextSelectorInput && typeof localStorage !== 'undefined') {
@@ -868,7 +1113,7 @@
 			}
 		}
 	}
-	
+
 	// Helper function to get webhook triggers
 	function getWebhookTriggers() {
 		console.log('🔍 DEBUG: Getting webhook triggers');
@@ -878,17 +1123,17 @@
 			scrapingCompleted: false,
 			pageCompleted: false
 		};
-		
+
 		// Get all checkboxes in webhook settings
 		const webhookCheckboxes = document.querySelectorAll('#webhookSettingsContent input[type="checkbox"]');
 		console.log('🔍 DEBUG: Found webhook checkboxes:', webhookCheckboxes.length);
-		
+
 		webhookCheckboxes.forEach((checkbox, index) => {
 			const label = checkbox.nextElementSibling;
 			if (label && label.textContent) {
 				const labelText = label.textContent.trim();
 				console.log('🔍 DEBUG: Checkbox', index, 'label:', labelText, 'checked:', checkbox.checked);
-				
+
 				if (labelText.includes('Scraping Started')) {
 					triggers.scrapingStarted = checkbox.checked;
 				} else if (labelText.includes('Error Occurred')) {
@@ -900,43 +1145,43 @@
 				}
 			}
 		});
-		
+
 		console.log('🔍 DEBUG: Final triggers:', triggers);
 		return triggers;
 	}
-	
+
 	// Function to save all settings to Chrome storage
 	function saveAllSettings() {
 		console.log('🔍 DEBUG: Starting saveAllSettings function');
-		
+
 		// Debug: Check Chrome API availability
 		console.log('🔍 DEBUG: chrome object:', chrome);
 		console.log('🔍 DEBUG: chrome.storage:', chrome?.storage);
 		console.log('🔍 DEBUG: chrome.storage.sync:', chrome?.storage?.sync);
-		
+
 		const settings = {
 			// Next Page Selectors
 			nextPageSelectors: [],
-			
+
 			// Automation Settings
 			autoDownloadCSV: document.getElementById('autoDownloadCSV')?.checked || false,
 			autoUploadDrive: document.getElementById('autoUploadDrive')?.checked || false,
-			
+
 			// Authentication Method
 			authMethod: document.querySelector('input[name="authMethod"]:checked')?.value || 'oauth',
-			
+
 			// OAuth 2.0 Credentials
 			oauth: {
 				clientId: document.querySelector('#oauthFields input[placeholder*="Client ID"]')?.value || '',
 				clientSecret: document.querySelector('#oauthFields input[placeholder*="Client Secret"]')?.value || ''
 			},
-			
+
 			// Service Account Credentials
 			serviceAccount: {
 				email: document.querySelector('#serviceFields input[type="email"]')?.value || '',
 				privateKeyFile: document.getElementById('fileName')?.textContent || 'No file chosen'
 			},
-			
+
 			// Webhook Settings
 			webhooks: {
 				enabled: document.getElementById('enableWebhooks')?.checked || false,
@@ -944,11 +1189,11 @@
 				authentication: document.querySelector('input[name="webhookAuth"]:checked')?.value || 'none',
 				triggers: getWebhookTriggers()
 			},
-			
+
 			// Timestamp
 			savedAt: new Date().toISOString()
 		};
-		
+
 		// Collect next page selectors
 		const selectorItems = document.querySelectorAll('#selectorsList .flex.items-center.justify-between');
 		console.log('🔍 DEBUG: Found selector items:', selectorItems.length);
@@ -958,26 +1203,26 @@
 				settings.nextPageSelectors.push(selectorText.trim());
 			}
 		});
-		
+
 		console.log('🔍 DEBUG: Settings object to save:', settings);
 		console.log('🔍 DEBUG: Settings JSON size:', JSON.stringify(settings).length, 'bytes');
-		
+
 		// Check if we're in extension context
 		if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
 			console.log('🔍 DEBUG: Chrome storage API is available');
-			
+
 			// Test Chrome storage with a simple value first
-			chrome.storage.sync.set({ 'testKey': 'testValue' }, function() {
+			chrome.storage.sync.set({ 'testKey': 'testValue' }, function () {
 				if (chrome.runtime.lastError) {
 					console.error('🔍 DEBUG: Test storage failed:', chrome.runtime.lastError);
 					alert('❌ Chrome storage test failed: ' + chrome.runtime.lastError.message);
 					return;
 				}
-				
+
 				console.log('🔍 DEBUG: Test storage successful, proceeding with settings save');
-				
+
 				// Now save the actual settings
-				chrome.storage.sync.set({ 'scrapperSettings': settings }, function() {
+				chrome.storage.sync.set({ 'scrapperSettings': settings }, function () {
 					if (chrome.runtime.lastError) {
 						console.error('❌ Error saving settings:', chrome.runtime.lastError);
 						console.error('🔍 DEBUG: Full error object:', chrome.runtime.lastError);
@@ -985,9 +1230,9 @@
 						showScrapingNotification('Error saving settings: ' + chrome.runtime.lastError.message, 'error');
 					} else {
 						console.log('✅ Settings saved successfully to Chrome storage:', settings);
-						
+
 						// Verify the save by reading it back
-						chrome.storage.sync.get(['scrapperSettings'], function(result) {
+						chrome.storage.sync.get(['scrapperSettings'], function (result) {
 							console.log('🔍 DEBUG: Verification read result:', result);
 							if (result.scrapperSettings) {
 								console.log('✅ Settings verified successfully');
@@ -1006,7 +1251,7 @@
 			console.log('🔍 DEBUG: chrome object exists:', typeof chrome !== 'undefined');
 			console.log('🔍 DEBUG: chrome.storage exists:', typeof chrome?.storage !== 'undefined');
 			console.log('🔍 DEBUG: chrome.storage.sync exists:', typeof chrome?.storage?.sync !== 'undefined');
-			
+
 			// Fallback to localStorage if Chrome storage not available
 			try {
 				localStorage.setItem('scrapperSettings', JSON.stringify(settings));
@@ -1019,19 +1264,19 @@
 			}
 		}
 	}
-	
+
 	// Function to load all settings from Chrome storage
 	function loadAllSettings() {
 		console.log('🔄 Loading settings from storage...');
-		
+
 		if (chrome && chrome.storage) {
-			chrome.storage.sync.get(['scrapperSettings'], function(result) {
+			chrome.storage.sync.get(['scrapperSettings'], function (result) {
 				if (chrome.runtime.lastError) {
 					console.error('❌ Error loading settings:', chrome.runtime.lastError);
 					showScrapingNotification('Error loading settings: ' + chrome.runtime.lastError.message, 'error');
 					return;
 				}
-				
+
 				const settings = result.scrapperSettings;
 				if (settings) {
 					try {
@@ -1050,7 +1295,7 @@
 		} else {
 			// Fallback to localStorage
 			console.log('⚠️ Chrome storage not available, using localStorage fallback');
-			
+
 			try {
 				const savedSettings = localStorage.getItem('scrapperSettings');
 				if (savedSettings) {
@@ -1068,7 +1313,7 @@
 			}
 		}
 	}
-	
+
 	// Function to apply loaded settings to the UI
 	function applySettings(settings) {
 		// Automation Settings
@@ -1076,7 +1321,7 @@
 			const autoDownloadCSV = document.getElementById('autoDownloadCSV');
 			if (autoDownloadCSV) autoDownloadCSV.checked = settings.autoDownloadCSV;
 		}
-		
+
 		if (settings.autoUploadDrive !== undefined) {
 			const autoUploadDrive = document.getElementById('autoUploadDrive');
 			if (autoUploadDrive) {
@@ -1084,7 +1329,7 @@
 				toggleAuthMethodSection(); // Trigger visibility logic
 			}
 		}
-		
+
 		// Authentication Method
 		if (settings.authMethod) {
 			const authRadio = document.querySelector(`input[name="authMethod"][value="${settings.authMethod}"]`);
@@ -1093,7 +1338,7 @@
 				switchAuthMethod(); // Trigger field visibility
 			}
 		}
-		
+
 		// OAuth Credentials
 		if (settings.oauth) {
 			const clientIdInput = document.querySelector('#oauthFields input[placeholder*="Client ID"]');
@@ -1101,7 +1346,7 @@
 			if (clientIdInput) clientIdInput.value = settings.oauth.clientId || '';
 			if (clientSecretInput) clientSecretInput.value = settings.oauth.clientSecret || '';
 		}
-		
+
 		// Service Account Credentials
 		if (settings.serviceAccount) {
 			const emailInput = document.querySelector('#serviceFields input[type="email"]');
@@ -1109,7 +1354,7 @@
 			if (emailInput) emailInput.value = settings.serviceAccount.email || '';
 			if (fileNameSpan) fileNameSpan.textContent = settings.serviceAccount.privateKeyFile || 'No file chosen';
 		}
-		
+
 		// Webhook Settings
 		if (settings.webhooks) {
 			const enableWebhooks = document.getElementById('enableWebhooks');
@@ -1117,16 +1362,16 @@
 				enableWebhooks.checked = settings.webhooks.enabled;
 				toggleWebhookSettingsContent(); // Trigger visibility logic
 			}
-			
+
 			const webhookUrlInput = document.querySelector('input[placeholder*="webhook"]');
 			if (webhookUrlInput) webhookUrlInput.value = settings.webhooks.url || '';
-			
+
 			// Webhook Authentication
 			if (settings.webhooks.authentication) {
 				const authRadio = document.querySelector(`input[name="webhookAuth"][value="${settings.webhooks.authentication}"]`);
 				if (authRadio) authRadio.checked = true;
 			}
-			
+
 			// Event Triggers
 			if (settings.webhooks.triggers) {
 				const triggers = settings.webhooks.triggers;
@@ -1140,14 +1385,14 @@
 				});
 			}
 		}
-		
+
 		// Next Page Selectors
 		if (settings.nextPageSelectors && settings.nextPageSelectors.length > 0) {
 			const selectorsList = document.getElementById('selectorsList');
 			if (selectorsList) {
 				// Clear existing selectors (except default ones)
 				selectorsList.innerHTML = '';
-				
+
 				// Add saved selectors
 				settings.nextPageSelectors.forEach(selector => {
 					const selectorDiv = document.createElement('div');
@@ -1160,20 +1405,20 @@
 					`;
 					selectorsList.appendChild(selectorDiv);
 				});
-				
+
 				updateSelectorSuggestions();
 			}
 		}
-		
+
 		console.log('Settings applied to UI successfully');
 	}
-	
+
 	// Function to reset all settings
 	function resetAllSettings() {
 		if (confirm('Are you sure you want to reset all settings to defaults? This action cannot be undone.')) {
 			// Clear Chrome storage
 			if (chrome && chrome.storage) {
-				chrome.storage.sync.remove(['scrapperSettings'], function() {
+				chrome.storage.sync.remove(['scrapperSettings'], function () {
 					if (chrome.runtime.lastError) {
 						console.error('Error clearing settings:', chrome.runtime.lastError);
 					} else {
@@ -1184,13 +1429,13 @@
 				localStorage.removeItem('scrapperSettings');
 				console.log('Settings cleared from localStorage');
 			}
-			
+
 			// Reset UI to defaults
 			resetUIToDefaults();
 			showScrapingNotification('Settings reset to defaults!', 'warning');
 		}
 	}
-	
+
 	// Function to reset UI to default values
 	function resetUIToDefaults() {
 		// Reset automation settings
@@ -1198,34 +1443,34 @@
 		const autoUploadDrive = document.getElementById('autoUploadDrive');
 		if (autoDownloadCSV) autoDownloadCSV.checked = false;
 		if (autoUploadDrive) autoUploadDrive.checked = true; // Default to checked
-		
+
 		// Reset authentication method to OAuth
 		const oauthRadio = document.getElementById('oauthRadio');
 		if (oauthRadio) oauthRadio.checked = true;
-		
+
 		// Clear form fields
 		document.querySelectorAll('#oauthFields input, #serviceFields input').forEach(input => {
 			input.value = '';
 		});
-		
+
 		// Reset webhook settings
 		const enableWebhooks = document.getElementById('enableWebhooks');
 		if (enableWebhooks) enableWebhooks.checked = true; // Default to enabled
-		
+
 		document.querySelectorAll('#webhookSettingsContent input[type="url"], #webhookSettingsContent input[type="text"]').forEach(input => {
 			input.value = '';
 		});
-		
+
 		// Reset webhook auth to none
 		const webhookAuthNone = document.querySelector('input[name="webhookAuth"][value="none"]');
 		if (webhookAuthNone) webhookAuthNone.checked = true;
-		
+
 		// Reset event triggers - keep only "Scraping Completed" checked
 		document.querySelectorAll('#webhookSettingsContent input[type="checkbox"]').forEach((checkbox, index) => {
 			const label = checkbox.nextElementSibling?.textContent;
 			checkbox.checked = label?.includes('Scraping Completed') || false;
 		});
-		
+
 		// Reset selectors list to defaults
 		const selectorsList = document.getElementById('selectorsList');
 		if (selectorsList) {
@@ -1244,7 +1489,7 @@
 				</div>
 			`;
 		}
-		
+
 		// Trigger visibility logic
 		toggleAuthMethodSection();
 		toggleWebhookSettingsContent();
@@ -1263,33 +1508,51 @@
 	if (addSelector) addSelector.addEventListener('click', addNewSelector);
 	if (oauthRadio) oauthRadio.addEventListener('change', switchAuthMethod);
 	if (serviceRadio) serviceRadio.addEventListener('change', switchAuthMethod);
-	if (paginationNone) paginationNone.addEventListener('change', toggleCSSSelector);
-	if (paginationCSS) paginationCSS.addEventListener('change', toggleCSSSelector);
-	if (paginationInfinite) paginationInfinite.addEventListener('change', toggleCSSSelector);
-	if (privateKeyFile && fileName) {
-	privateKeyFile.addEventListener('change', function (e) {
-		const file = e.target.files[0];
-		fileName.textContent = file ? file.name : 'No file chosen';
+	if (paginationNone) paginationNone.addEventListener('change', function() {
+		toggleCSSSelector();
+		// Check next page existence after pagination type change
+		setTimeout(() => {
+			updateStatusBadgeWithNextPage();
+		}, 300);
 	});
+	if (paginationCSS) paginationCSS.addEventListener('change', function() {
+		toggleCSSSelector();
+		// Check next page existence after pagination type change
+		setTimeout(() => {
+			updateStatusBadgeWithNextPage();
+		}, 300);
+	});
+	if (paginationInfinite) paginationInfinite.addEventListener('change', function() {
+		toggleCSSSelector();
+		// Check next page existence after pagination type change
+		setTimeout(() => {
+			updateStatusBadgeWithNextPage();
+		}, 300);
+	});
+	if (privateKeyFile && fileName) {
+		privateKeyFile.addEventListener('change', function (e) {
+			const file = e.target.files[0];
+			fileName.textContent = file ? file.name : 'No file chosen';
+		});
 	}
-			if (saveSettings) {
-	saveSettings.addEventListener('click', function () {
+	if (saveSettings) {
+		saveSettings.addEventListener('click', function () {
 			// Show loading state
 			const originalText = saveSettings.textContent;
 			saveSettings.textContent = 'Saving...';
 			saveSettings.disabled = true;
-			
+
 			// Save settings with a slight delay to show loading state
 			setTimeout(() => {
 				saveAllSettings();
-				
+
 				// Restore button state
 				saveSettings.textContent = originalText;
 				saveSettings.disabled = false;
-				
+
 				// Close modal after save
 				setTimeout(() => {
-		closeSettingsModal();
+					closeSettingsModal();
 				}, 1000);
 			}, 200);
 		});
@@ -1301,31 +1564,31 @@
 	}
 	document.addEventListener('click', function (e) {
 		console.log('🔍 Click event detected:', e.target);
-		
+
 		// Handle crawl history remove button clicks (fallback method)
 		if (e.target.classList.contains('fa-times') || e.target.classList.contains('crawl-history-remove')) {
 			const removeButton = e.target.closest('.crawl-history-remove');
 			if (removeButton) {
 				console.log('✅ Remove button clicked via event listener!');
 				const historyItem = removeButton.closest('.p-3.bg-gray-50.rounded-lg');
-				
+
 				if (historyItem) {
 					const crawlId = historyItem.getAttribute('data-crawl-id');
 					console.log('🔍 Crawl ID from event listener:', crawlId);
-					
+
 					if (crawlId) {
 						console.log('🗑️ Removing crawl from history via event listener:', crawlId);
 						removeCrawlFromHistory(crawlId);
 						historyItem.remove();
 						console.log('✅ History item removed from DOM via event listener');
-						
+
 						// Show success notification
 						showScrapingNotification('Crawl history item removed', 'success');
 					}
 				}
 			}
 		}
-		
+
 		// Handle selector removal (existing functionality)
 		if (e.target.classList.contains('fa-trash') || (e.target.closest('button') && e.target.closest('button').querySelector('.fa-trash'))) {
 			const selectorItem = e.target.closest('.flex.items-center.justify-between');
@@ -1348,21 +1611,21 @@
 		console.log('🔍 Click event detected:', e.target);
 		console.log('🔍 Target classes:', e.target.classList);
 		console.log('🔍 Closest remove button:', e.target.closest('.crawl-history-remove'));
-		
+
 		// Check if click is on the remove button or its icon
 		const removeButton = e.target.closest('.crawl-history-remove');
 		const isIconClick = e.target.classList.contains('fa-times');
 		const isButtonClick = e.target.classList.contains('crawl-history-remove');
-		
+
 		if ((isIconClick || isButtonClick) && removeButton) {
 			console.log('✅ Remove button clicked!');
 			const historyItem = e.target.closest('.p-3.bg-gray-50.rounded-lg');
 			console.log('🔍 History item found:', historyItem);
-			
+
 			if (historyItem) {
 				const crawlId = historyItem.getAttribute('data-crawl-id');
 				console.log('🔍 Crawl ID:', crawlId);
-				
+
 				if (crawlId) {
 					console.log('🗑️ Removing crawl from history:', crawlId);
 					removeCrawlFromHistory(crawlId);
@@ -1379,54 +1642,87 @@
 	if (applyNextSelector) applyNextSelector.addEventListener('click', handleUseSelectorClick);
 	if (paginationCSS) paginationCSS.addEventListener('change', toggleCSSSelector);
 	if (refreshHistoryBtn) refreshHistoryBtn.addEventListener('click', handleRefreshHistory);
+	
+	// Add event listener for next selector input changes to check next page existence
+	if (nextSelectorInput) {
+		nextSelectorInput.addEventListener('input', function() {
+			// Debounce the check to avoid too many requests
+			clearTimeout(window.nextPageCheckTimeout);
+			window.nextPageCheckTimeout = setTimeout(() => {
+				updateStatusBadgeWithNextPage();
+			}, 500);
+		});
+	}
+	
+	// Add a retry mechanism for content script communication
+	window.retryNextPageCheck = function(maxRetries = 3, delay = 1000) {
+		let retryCount = 0;
+		
+		function attemptCheck() {
+			console.log(`🔄 Attempting next page check (attempt ${retryCount + 1}/${maxRetries})`);
+			
+			updateStatusBadgeWithNextPage();
+			
+			// Check if we need to retry (if status is still error after a delay)
+			setTimeout(() => {
+				const statusBadge = document.querySelector('.bg-red-100');
+				if (statusBadge && statusBadge.textContent === 'Error' && retryCount < maxRetries - 1) {
+					retryCount++;
+					attemptCheck();
+				}
+			}, delay);
+		}
+		
+		attemptCheck();
+	};
 	// Function to test Chrome storage permissions and functionality
 	function testChromeStorage() {
 		console.log('🔍 DEBUG: Testing Chrome storage permissions...');
-		
+
 		// Check if running in extension context
 		if (typeof chrome === 'undefined') {
 			console.error('❌ Chrome API not available - not running in extension context');
 			return false;
 		}
-		
+
 		// Check if storage API exists
 		if (!chrome.storage) {
 			console.error('❌ Chrome storage API not available - missing storage permission?');
 			return false;
 		}
-		
+
 		// Check if sync storage exists
 		if (!chrome.storage.sync) {
 			console.error('❌ Chrome sync storage not available');
 			return false;
 		}
-		
+
 		// Test basic storage functionality
 		const testKey = 'storageTest_' + Date.now();
 		const testValue = 'test_' + Math.random();
-		
+
 		console.log('🔍 DEBUG: Testing storage with key:', testKey, 'value:', testValue);
-		
-		chrome.storage.sync.set({ [testKey]: testValue }, function() {
+
+		chrome.storage.sync.set({ [testKey]: testValue }, function () {
 			if (chrome.runtime.lastError) {
 				console.error('❌ Storage test write failed:', chrome.runtime.lastError);
 				return false;
 			}
-			
+
 			console.log('✅ Storage test write successful');
-			
+
 			// Test read
-			chrome.storage.sync.get([testKey], function(result) {
+			chrome.storage.sync.get([testKey], function (result) {
 				if (chrome.runtime.lastError) {
 					console.error('❌ Storage test read failed:', chrome.runtime.lastError);
 					return false;
 				}
-				
+
 				if (result[testKey] === testValue) {
 					console.log('✅ Storage test read successful - Chrome storage is working!');
-					
+
 					// Clean up test data
-					chrome.storage.sync.remove([testKey], function() {
+					chrome.storage.sync.remove([testKey], function () {
 						console.log('🧹 Test data cleaned up');
 					});
 				} else {
@@ -1435,28 +1731,28 @@
 				}
 			});
 		});
-		
+
 		return true;
 	}
-	
+
 	// Debug function - can be called from browser console
-	window.debugStorage = function() {
+	window.debugStorage = function () {
 		console.log('🔧 Manual storage debug called');
 		console.log('🔍 Chrome object:', chrome);
 		console.log('🔍 Chrome storage:', chrome?.storage);
 		console.log('🔍 Chrome storage sync:', chrome?.storage?.sync);
-		
+
 		if (chrome && chrome.storage && chrome.storage.sync) {
 			// Try to save a test value
 			const testData = { debugTest: 'Manual test - ' + new Date().toISOString() };
-			chrome.storage.sync.set(testData, function() {
+			chrome.storage.sync.set(testData, function () {
 				if (chrome.runtime.lastError) {
 					console.error('❌ Debug storage save failed:', chrome.runtime.lastError);
 				} else {
 					console.log('✅ Debug storage save successful:', testData);
-					
+
 					// Try to read it back
-					chrome.storage.sync.get(['debugTest'], function(result) {
+					chrome.storage.sync.get(['debugTest'], function (result) {
 						if (chrome.runtime.lastError) {
 							console.error('❌ Debug storage read failed:', chrome.runtime.lastError);
 						} else {
@@ -1469,17 +1765,17 @@
 			console.error('❌ Chrome storage not available for manual debug');
 		}
 	};
-	
+
 	// Make saveAllSettings available globally for testing
 	window.testSaveSettings = saveAllSettings;
-	
+
 	// Make crawl history functions available globally for popup.js integration
 	window.addCrawlHistoryItem = addCrawlHistoryItem;
 	window.updateCrawlHistoryItem = updateCrawlHistoryItem;
 	window.currentCrawlId = null;
-	
+
 	// Function to periodically update crawl progress
-	window.updateCrawlProgress = function(itemCount) {
+	window.updateCrawlProgress = function (itemCount) {
 		if (window.currentCrawlId) {
 			const historyItem = document.querySelector(`[data-crawl-id="${window.currentCrawlId}"]`);
 			if (historyItem) {
@@ -1490,27 +1786,27 @@
 			}
 		}
 	};
-	
+
 	// Function to handle refresh history button click
 	function handleRefreshHistory() {
 		console.log('🔄 Refreshing crawl history...');
-		
+
 		// Add loading animation to refresh button
 		const refreshIcon = refreshHistoryBtn.querySelector('i');
 		if (refreshIcon) {
 			refreshIcon.classList.add('animate-spin');
 		}
-		
+
 		// Reload crawl history
 		loadCrawlHistory();
-		
+
 		// Stop animation after a short delay
 		setTimeout(() => {
 			if (refreshIcon) {
 				refreshIcon.classList.remove('animate-spin');
 			}
 			showScrapingNotification('Crawl history refreshed', 'success');
-			
+
 			// Hide the success notification after 3 seconds
 			setTimeout(() => {
 				const notifications = document.querySelectorAll('.notification');
@@ -1525,41 +1821,57 @@
 			}, 3000);
 		}, 1000);
 	}
-	
+
 	// Listen for Chrome storage changes to sync across extensions
 	function setupChromeStorageListener() {
 		if (chrome && chrome.storage && chrome.storage.onChanged) {
-			chrome.storage.onChanged.addListener(function(changes, namespace) {
+			chrome.storage.onChanged.addListener(function (changes, namespace) {
 				if (namespace === 'sync' && changes.crawlHistory) {
 					console.log('🔄 Crawl history changed in Chrome storage, updating UI...');
-					
+
 					// Reload the history to show the latest changes
 					loadCrawlHistory();
-					
+
 					// Show notification about sync
 					showScrapingNotification('Crawl history synced from another extension', 'info');
 				}
 			});
-					console.log('✅ Chrome storage change listener set up');
+			console.log('✅ Chrome storage change listener set up');
+		}
 	}
-	
+
+	// Listen for tab updates to update title when URL changes
+	function setupTabUpdateListener() {
+		if (chrome && chrome.tabs && chrome.tabs.onUpdated) {
+			chrome.tabs.onUpdated.addListener(function (tabId, changeInfo, tab) {
+				if (changeInfo.status === 'complete' && tab.active) {
+					// Update title when page navigation is complete
+					setTimeout(() => {
+						updatePageTitle(tabId);
+					}, 1000); // Small delay to ensure page is fully loaded
+				}
+			});
+			console.log('✅ Tab update listener set up');
+		}
+	}
+
 	// Function to remove crawl from history (moved to global scope)
 	function removeCrawlFromHistory(crawlId) {
 		console.log('🗑️ Removing crawl from history:', crawlId);
-		
+
 		if (chrome && chrome.storage && chrome.storage.sync) {
-			chrome.storage.sync.get(['crawlHistory'], function(result) {
+			chrome.storage.sync.get(['crawlHistory'], function (result) {
 				if (chrome.runtime.lastError) {
 					console.error('❌ Error reading from Chrome storage:', chrome.runtime.lastError);
 					// Fallback to localStorage
 					removeFromLocalStorage(crawlId);
 					return;
 				}
-				
+
 				const existingHistory = result.crawlHistory || [];
 				const filteredHistory = existingHistory.filter(item => item.id !== crawlId);
-				
-				chrome.storage.sync.set({ 'crawlHistory': filteredHistory }, function() {
+
+				chrome.storage.sync.set({ 'crawlHistory': filteredHistory }, function () {
 					if (chrome.runtime.lastError) {
 						console.error('❌ Error removing from Chrome storage:', chrome.runtime.lastError);
 						// Fallback to localStorage
@@ -1574,10 +1886,10 @@
 			removeFromLocalStorage(crawlId);
 		}
 	}
-	
+
 	// Make function globally accessible
 	window.removeCrawlFromHistory = removeCrawlFromHistory;
-	
+
 	function removeFromLocalStorage(crawlId) {
 		if (typeof localStorage !== 'undefined') {
 			try {
@@ -1590,29 +1902,39 @@
 			}
 		}
 	}
-	}
 
 	document.addEventListener('DOMContentLoaded', function () {
 		updateSelectorSuggestions();
-		
+
 		// Test Chrome storage functionality
 		testChromeStorage();
-		
+
 		// Load saved settings from Chrome storage
 		loadAllSettings();
-		
+
 		// Load saved next selector
 		loadSavedNextSelector();
-		
+
 		// Load crawl history
 		loadCrawlHistory();
-		
+
 		// Setup Chrome storage change listener for cross-extension sync
 		setupChromeStorageListener();
-		
+
+		// Setup tab update listener for title updates
+		setupTabUpdateListener();
+
 		// Update stats display with actual data
 		updateStatsDisplay();
-		
+
+		// Update page title with current URL
+		updatePageTitle();
+
+		// Check next page existence on initial load with retry mechanism
+		setTimeout(() => {
+			window.retryNextPageCheck(3, 1500);
+		}, 1000);
+
 		// Demo table generation for testing (remove in production)
 		if (window.location.search.includes('demo=true')) {
 			setTimeout(() => {
@@ -1620,24 +1942,59 @@
 			}, 2000);
 		}
 	});
-	
+
 	// Make updateStatsDisplay globally accessible for testing
 	window.updateStatsDisplay = updateStatsDisplay;
+
+	// Make updatePageTitle globally accessible
+	window.updatePageTitle = updatePageTitle;
 	
+	// Debug function to test content script communication
+	window.testContentScriptCommunication = function() {
+		console.log('🧪 Testing content script communication...');
+		
+		if (typeof chrome !== 'undefined' && chrome.tabs) {
+			chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+				if (chrome.runtime.lastError) {
+					console.error('❌ Error querying tabs:', chrome.runtime.lastError);
+					return;
+				}
+				
+				if (tabs && tabs[0]) {
+					console.log('📡 Sending test message to tab:', tabs[0].id);
+					
+					chrome.tabs.sendMessage(tabs[0].id, {
+						action: "test"
+					}, function (response) {
+						if (chrome.runtime.lastError) {
+							console.error('❌ Content script communication failed:', chrome.runtime.lastError);
+						} else {
+							console.log('✅ Content script communication successful:', response);
+						}
+					});
+				} else {
+					console.error('❌ No active tab found');
+				}
+			});
+		} else {
+			console.error('❌ Chrome tabs API not available');
+		}
+	};
+
 	// Demo function to test table generation
-	function generateDemoTable() {
-		// Simulate scraped data structure
+	window.generateDemoTable = function() {
+		// Simulate scraped data structure with more columns to demonstrate horizontal scrolling
 		const demoData = {
-			fields: ['name', 'price', 'rating', 'reviews', 'availability'],
+			fields: ['name', 'price', 'rating', 'reviews', 'availability', 'category', 'brand', 'sku', 'weight', 'dimensions', 'warranty', 'shipping'],
 			data: [
-				['Product Alpha', '$24.99', '4.5/5', '127', 'In Stock'],
-				['Product Beta', '$35.50', '3.8/5', '89', 'Out of Stock'],
-				['Product Gamma', '$19.99', '4.2/5', '203', 'In Stock'],
-				['Widget Pro', '$49.99', '4.8/5', '456', 'In Stock'],
-				['Gadget X', '$12.75', '3.1/5', '67', 'Limited Stock']
+				['Product Alpha', '$24.99', '4.5/5', '127', 'In Stock', 'Electronics', 'TechCorp', 'TC-001', '2.5 lbs', '10x5x3"', '1 Year', 'Free'],
+				['Product Beta', '$35.50', '3.8/5', '89', 'Out of Stock', 'Home & Garden', 'HomeMax', 'HM-002', '1.8 lbs', '8x4x2"', '2 Years', '$5.99'],
+				['Product Gamma', '$19.99', '4.2/5', '203', 'In Stock', 'Sports', 'SportPro', 'SP-003', '3.2 lbs', '12x6x4"', '90 Days', 'Free'],
+				['Widget Pro', '$49.99', '4.8/5', '456', 'In Stock', 'Tools', 'ToolMaster', 'TM-004', '5.1 lbs', '15x8x6"', 'Lifetime', '$8.99'],
+				['Gadget X', '$12.75', '3.1/5', '67', 'Limited Stock', 'Kitchen', 'KitchenPlus', 'KP-005', '0.9 lbs', '6x3x2"', '6 Months', 'Free']
 			]
 		};
-		
+
 		// Check if generateModernTable function exists (from popup.js)
 		if (typeof generateModernTable === 'function') {
 			generateModernTable(demoData);
@@ -1646,16 +2003,29 @@
 			generateSimpleTable(demoData);
 		}
 	}
-	
+
 	function generateSimpleTable(data) {
 		const headers = data.fields;
 		const rows = data.data;
-		
+
 		let tableHtml = `
-			<table class="w-full resizable-table">
-				<thead class="bg-gray-50">
-					<tr>`;
-		
+			<div class="table-scroll-container relative">
+				<!-- Scroll shadow indicators -->
+				<div class="scroll-shadow-left hidden"></div>
+				<div class="scroll-shadow-right"></div>
+				
+				<!-- Scroll indicators -->
+				<div class="scroll-indicator left" title="Scroll left">
+					<i class="fas fa-chevron-left"></i>
+				</div>
+				<div class="scroll-indicator right" title="Scroll right">
+					<i class="fas fa-chevron-right"></i>
+				</div>
+				
+				<table class="w-full resizable-table">
+					<thead class="bg-gray-50">
+						<tr>`;
+
 		headers.forEach((header, index) => {
 			const fieldName = `field_${index}`;
 			tableHtml += `<th class="px-3 py-2 text-left text-sm font-medium text-gray-700 relative group resizable-column" style="min-width: 400px; width: 400px;">
@@ -1673,14 +2043,14 @@
 				<div class="column-resizer absolute right-0 top-0 bottom-0 w-2 cursor-col-resize bg-transparent hover:bg-blue-500 transition-colors"></div>
 			</th>`;
 		});
-		
+
 		tableHtml += `</tr></thead><tbody class="divide-y divide-gray-200">`;
-		
+
 		rows.forEach(row => {
 			tableHtml += `<tr class="hover:bg-gray-50">`;
 			row.forEach((cell, index) => {
 				let cellClass = "px-3 py-2 text-sm";
-				
+
 				// Apply smart styling
 				if (typeof cell === 'string' && cell.match(/^\$[\d,]+\.?\d*$/)) {
 					cellClass += " text-blue-600 font-medium";
@@ -1697,26 +2067,104 @@
 				} else {
 					cellClass += " text-gray-900";
 				}
-				
+
 				tableHtml += `<td class="${cellClass}">${cell}</td>`;
 			});
 			tableHtml += `</tr>`;
 		});
-		
-		tableHtml += `</tbody></table>`;
-		
+
+		tableHtml += `</tbody></table>
+		</div>`;
+
 		tableHtml += `
 			<div class="p-4 border-t bg-gray-50">
 				<p class="text-sm text-gray-600 text-center">Showing all ${rows.length} rows</p>
 			</div>`;
-		
+
 		document.getElementById('hot').innerHTML = tableHtml;
-		
+
 		// Initialize column resizing if available
 		if (typeof addColumnResizing === 'function') {
 			addColumnResizing();
 		}
+		
+		// Initialize horizontal scroll handlers if available
+		if (typeof addHorizontalScrollHandlers === 'function') {
+			addHorizontalScrollHandlers();
+		}
 	}
+
+	// Function to check next page existence (for use in scraping workflow)
+	window.checkNextPageExists = function(callback) {
+		console.log('🔍 Checking if next page exists (from index-page.js)...');
+		
+		// Get current next selector value
+		const nextSelectorValue = nextSelectorInput ? nextSelectorInput.value.trim() : '';
+		
+		if (!nextSelectorValue) {
+			console.log('❌ No next selector configured');
+			callback(false);
+			return;
+		}
+		
+		// Check if infinite scroll is enabled
+		const paginationInfinite = document.getElementById('paginationInfinite');
+		if (paginationInfinite && paginationInfinite.checked) {
+			console.log('✅ Infinite scroll enabled - assuming next page exists');
+			callback(true);
+			return;
+		}
+		
+		// Check if next button/link exists on the current page
+		if (typeof chrome !== 'undefined' && chrome.tabs) {
+			chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+				if (chrome.runtime.lastError) {
+					console.error('❌ Error querying tabs:', chrome.runtime.lastError);
+					console.error('❌ Error details:', chrome.runtime.lastError.message);
+					// Fallback - assume no next page
+					console.log('⚠️ Tab query failed, assuming no next page');
+					callback(false);
+					return;
+				}
+				
+				if (tabs && tabs[0]) {
+					console.log('🔍 Checking next page with selector:', nextSelectorValue, 'on tab:', tabs[0].id);
+					
+					chrome.tabs.sendMessage(tabs[0].id, {
+						action: "checkNextPageExists",
+						selector: nextSelectorValue
+					}, function (response) {
+						if (chrome.runtime.lastError) {
+							console.error('❌ Error checking next page:', chrome.runtime.lastError);
+							console.error('❌ Error details:', chrome.runtime.lastError.message);
+							// Fallback - assume no next page for safety
+							console.log('⚠️ Content script communication failed, assuming no next page');
+							callback(false);
+							return;
+						}
+						
+						console.log('📡 Response from content script:', response);
+						
+						if (response && response.exists) {
+							console.log('✅ Next page exists');
+							callback(true);
+						} else {
+							console.log('❌ No next page found');
+							callback(false);
+						}
+					});
+				} else {
+					console.error('❌ No active tab found');
+					// Fallback - assume no next page
+					callback(false);
+				}
+			});
+		} else {
+			console.error('❌ Chrome tabs API not available');
+			// Fallback - assume no next page
+			callback(false);
+		}
+	};
 })();
 
 

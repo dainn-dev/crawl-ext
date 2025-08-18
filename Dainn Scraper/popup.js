@@ -9,11 +9,6 @@ function formatWorkingTime(seconds) {
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
 
-// Helper function to get current tab ID
-function getCurrentTabId() {
-    return i && i.id ? i.id : null;
-}
-
 function e(e, t, n, o, r, a, i) {
     var s = {}
       , c = null
@@ -146,12 +141,7 @@ async function d() {
     $(window).resize(function() {
         v()
     }),
-    R());
-    
-    // Update page title with current URL when extension initializes
-    if (typeof window.updatePageTitle === 'function') {
-        window.updatePageTitle(getCurrentTabId());
-    }
+    R())
 }
 function f(e, t) {
     return (t || ".") + e.replace(/[!"#$%&'()*+,.\/:;<=>?@[\\\]^`{|}~]/g, "\\$&")
@@ -1607,12 +1597,7 @@ $("#wrongTable").click(function() {
     $("#hot").empty(),
     chrome.tabs.sendMessage(i.id, {
         action: "nextTable"
-    }, x);
-    
-    // Update page title when switching to a different table
-    if (typeof window.updatePageTitle === 'function') {
-        window.updatePageTitle(getCurrentTabId());
-    }
+    }, x)
 }),
 $("#nextSelectorInput").on("input", function() {
     const t = $(this).val().trim();
@@ -1671,11 +1656,6 @@ $("#startScraping").click(function(e) {
         console.log('🚀 Started crawl session from popup.js:', currentCrawlId);
     }
     
-    // Update page title with current URL when scraping starts
-    if (typeof window.updatePageTitle === 'function') {
-        window.updatePageTitle(getCurrentTabId());
-    }
-    
     T(); // Call the original function
 });
 
@@ -1704,11 +1684,6 @@ $("#stopScraping").click(function(e) {
         updateCrawlHistoryItem(currentCrawlId, itemCount, 'completed');
         console.log('🏁 Completed crawl session from popup.js:', currentCrawlId, 'with', itemCount, 'items');
         currentCrawlId = null;
-    }
-    
-    // Update page title when scraping stops
-    if (typeof window.updatePageTitle === 'function') {
-        window.updatePageTitle(getCurrentTabId());
     }
     
     L(); // Call the original stop function

@@ -8,52 +8,6 @@
 		return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 	}
 
-	// Function to update page title with current URL
-	function updatePageTitle(tabId = null) {
-		const titleElement = document.getElementById('pageTitle');
-		if (titleElement) {
-			// Get current URL from chrome.tabs API or use a default
-			if (typeof chrome !== 'undefined' && chrome.tabs) {
-				// Use specific tab ID if provided, otherwise query for active tab
-				const query = tabId ? { tabIds: [tabId] } : { active: true, currentWindow: true };
-				
-				chrome.tabs.query(query, function(tabs) {
-					if (tabs[0] && tabs[0].url) {
-						try {
-							const urlTab = new URL(tabs[0].url);
-							
-							// Check if this is a chrome extension URL and extract the actual URL parameter
-							if (urlTab.protocol === 'chrome-extension:') {
-								const urlParam = urlTab.searchParams.get('url');
-								if (urlParam) {
-									// Decode the URL parameter to get the actual target URL
-									const decodedUrl = decodeURIComponent(urlParam);
-									
-									titleElement.textContent = `Instant Data Scraper - ${decodedUrl}`;
-								} else {
-									titleElement.textContent = `Instant Data Scraper - ${urlTab.hostname}`;
-								}
-							} else {
-								// Regular URL (not chrome extension)
-								const hostname = urlTab.hostname;
-								const pathname = urlTab.pathname.length > 30 ? urlTab.pathname.substring(0, 30) + '...' : urlTab.pathname;
-								const fullUrl = hostname + pathname;
-								titleElement.textContent = `Instant Data Scraper - ${fullUrl}`;
-							}
-						} catch (e) {
-							titleElement.textContent = `Instant Data Scraper - ${tabs[0].url}`;
-						}
-					} else {
-						titleElement.textContent = 'Instant Data Scraper';
-					}
-				});
-			} else {
-				// Fallback for when chrome.tabs is not available
-				titleElement.textContent = 'Instant Data Scraper';
-			}
-		}
-	}
-
 	// Hide loading overlay once page is fully loaded
 	window.addEventListener('load', function () {
 		const loadingOverlay = document.getElementById('loadingOverlay');
@@ -64,25 +18,7 @@
 				loadingOverlay.style.display = 'none';
 			}, 500);
 		}, 800);
-		
-		// Update page title with current URL
-		updatePageTitle();
 	});
-
-	// Make updatePageTitle available globally
-	window.updatePageTitle = updatePageTitle;
-
-	// Listen for URL changes and update title accordingly
-	if (typeof chrome !== 'undefined' && chrome.tabs) {
-		chrome.tabs.onUpdated.addListener(function(tabId, changeInfo, tab) {
-			if (changeInfo.status === 'complete' && tab.active) {
-				// Update title when page navigation is complete
-				setTimeout(() => {
-					updatePageTitle(tabId);
-				}, 1000); // Small delay to ensure page is fully loaded
-			}
-		});
-	}
 
 	// Get DOM elements
 	const menuToggle = document.getElementById('menuToggle');

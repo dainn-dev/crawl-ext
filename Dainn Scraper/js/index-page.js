@@ -1046,6 +1046,16 @@
 			} else if (!running && scrapingActive) {
 				scrapingActive = false;
 				dnFireWebhook('scraping_completed');
+				// Mark the current crawl complete in history so the sidebar
+				// stops showing "Crawling…" for runs that ended without an
+				// explicit Stop click (e.g. ran out of pages, popup closed).
+				if (typeof currentCrawlId !== 'undefined' && currentCrawlId
+					&& typeof updateCrawlHistoryItem === 'function') {
+					const items = (typeof getScrapedItemCount === 'function')
+						? getScrapedItemCount() : 0;
+					try { updateCrawlHistoryItem(currentCrawlId, items, 'completed'); } catch (e) {}
+					currentCrawlId = null;
+				}
 			}
 		}).observe(stopBtn, { attributes: true, attributeFilter: ['class'] });
 
@@ -1770,7 +1780,7 @@
 					return;
 				}
 
-				const historyData = result.crawlHistory || [];
+				const historyData = sweepStaleCrawling(result.crawlHistory || []);
 				renderCrawlHistory(historyData);
 				console.log('✅ Crawl history loaded from Chrome storage:', historyData.length, 'items');
 			});
@@ -1778,6 +1788,26 @@
 			// Fallback to localStorage if Chrome storage not available
 			loadFromLocalStorage();
 		}
+	}
+
+	// Mark any history item that's still 'crawling' as 'completed' — they
+	// came from a prior session that ended without an explicit Stop click,
+	// so the stale status is misleading in the sidebar. The active run owns
+	// currentCrawlId and won't appear in storage yet at load time.
+	function sweepStaleCrawling(items) {
+		if (!Array.isArray(items) || !items.length) return items;
+		let changed = false;
+		const swept = items.map(it => {
+			if (it && it.status === 'crawling' && it.id !== currentCrawlId) {
+				changed = true;
+				return Object.assign({}, it, { status: 'completed' });
+			}
+			return it;
+		});
+		if (changed && chrome && chrome.storage && chrome.storage.sync) {
+			chrome.storage.sync.set({ crawlHistory: swept });
+		}
+		return swept;
 	}
 
 	function loadFromLocalStorage() {
@@ -1789,7 +1819,11 @@
 		}
 
 		try {
-			const historyData = JSON.parse(localStorage.getItem('crawlHistory') || '[]');
+			const raw = JSON.parse(localStorage.getItem('crawlHistory') || '[]');
+			const historyData = sweepStaleCrawling(raw);
+			if (historyData !== raw) {
+				localStorage.setItem('crawlHistory', JSON.stringify(historyData));
+			}
 			renderCrawlHistory(historyData);
 			console.log('✅ Crawl history loaded from localStorage:', historyData.length, 'items');
 		} catch (e) {
@@ -1824,8 +1858,13 @@
 			historyItem.setAttribute('data-crawl-id', crawlData.id);
 
 			const date = new Date(crawlData.startTime).toISOString().split('T')[0];
-			const statusClass = crawlData.status === 'completed' ? 'bg-blue-100 text-blue-800' : 'bg-yellow-100 text-yellow-800';
-			const statusText = crawlData.status === 'completed' ? `${crawlData.itemCount} items` : 'Crawling...';
+			// Only the currently active crawl can show "Crawling…". Anything
+			// else with a stale 'crawling' status is from a previous session
+			// that ended without an explicit Stop click — treat as completed
+			// and show whatever item count it captured.
+			const isActiveCrawl = crawlData.id === currentCrawlId && crawlData.status === 'crawling';
+			const statusClass = isActiveCrawl ? 'bg-yellow-100 text-yellow-800' : 'bg-blue-100 text-blue-800';
+			const statusText = isActiveCrawl ? 'Crawling...' : `${crawlData.itemCount || 0} items`;
 
 			// Use displayUrl if available, otherwise create one from url or fall back to domain
 			let displayText;
@@ -2377,11 +2416,11 @@
 
 	// Function to reset UI to default values
 	function resetUIToDefaults() {
-		// Reset automation settings
+		// Reset automation settings — both OFF by default
 		const autoDownloadCSV = document.getElementById('autoDownloadCSV');
 		const autoUploadDrive = document.getElementById('autoUploadDrive');
 		if (autoDownloadCSV) autoDownloadCSV.checked = false;
-		if (autoUploadDrive) autoUploadDrive.checked = true; // Default to checked
+		if (autoUploadDrive) autoUploadDrive.checked = false;
 
 		// Reset authentication method to OAuth
 		const oauthRadio = document.getElementById('oauthRadio');
@@ -2392,23 +2431,39 @@
 			input.value = '';
 		});
 
-		// Reset webhook settings
+		// Reset webhook settings — OFF by default
 		const enableWebhooks = document.getElementById('enableWebhooks');
-		if (enableWebhooks) enableWebhooks.checked = true; // Default to enabled
+		if (enableWebhooks) enableWebhooks.checked = false;
 
-		document.querySelectorAll('#webhookSettingsContent input[type="url"], #webhookSettingsContent input[type="text"]').forEach(input => {
-			input.value = '';
-		});
+		const webhookUrl = document.getElementById('dnWebhookUrl');
+		if (webhookUrl) webhookUrl.value = '';
 
-		// Reset webhook auth to none
+		// Reset webhook auth to none + clear credentials
 		const webhookAuthNone = document.querySelector('input[name="webhookAuth"][value="none"]');
 		if (webhookAuthNone) webhookAuthNone.checked = true;
-
-		// Reset event triggers - keep only "Scraping Completed" checked
-		document.querySelectorAll('#webhookSettingsContent input[type="checkbox"]').forEach((checkbox, index) => {
-			const label = checkbox.nextElementSibling?.textContent;
-			checkbox.checked = label?.includes('Scraping Completed') || false;
+		['dnAuthBasicUser', 'dnAuthBasicPass', 'dnAuthBearerToken', 'dnAuthApiHeader', 'dnAuthApiValue'].forEach(id => {
+			const el = document.getElementById(id);
+			if (el) el.value = '';
 		});
+
+		// Event triggers — only "scraping completed" on by default. Use IDs
+		// (the old label-matching broke after the wizard rename to lowercase).
+		const triggerDefaults = {
+			dnTrigScrapingStarted:   false,
+			dnTrigScrapingCompleted: true,
+			dnTrigPageCompleted:     false,
+			dnTrigErrorOccurred:     false
+		};
+		Object.keys(triggerDefaults).forEach(id => {
+			const el = document.getElementById(id);
+			if (el) el.checked = triggerDefaults[id];
+		});
+
+		// Sync conditional visibility blocks to the reset state.
+		if (typeof toggleAuthMethodSection === 'function') toggleAuthMethodSection();
+		if (typeof toggleWebhookSettingsContent === 'function') toggleWebhookSettingsContent();
+		if (typeof dnSyncWebhookAuthFields === 'function') dnSyncWebhookAuthFields();
+		if (typeof switchAuthMethod === 'function') switchAuthMethod();
 
 		// Reset selectors list to defaults
 		const selectorsList = document.getElementById('selectorsList');

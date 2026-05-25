@@ -580,6 +580,24 @@ body.dn-body {
     border: 1px dashed var(--dn-line-strong);
     border-radius: var(--dn-radius-sm);
 }
+.dn-selector-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+}
+.dn-selector-input-row .dn-input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.dn-selector-apply-btn {
+    flex: 0 0 150px;
+    width: 150px;
+    white-space: nowrap;
+}
+@media (max-width: 560px) {
+    .dn-selector-input-row { flex-direction: column; }
+    .dn-selector-apply-btn { flex: 0 0 auto; width: 100%; }
+}
 
 /* ===========================================================
    Settings modal — brand theme
@@ -2449,38 +2467,11 @@ body.col-resize-active * {
     background: var(--dn-ink) !important;
 }
 
-/* Column 3-dot menu (rendered by popup.js generateModernTable) */
-.dn-data-body .column-menu-btn > button {
-    background: transparent !important;
-    color: rgba(245, 184, 0, .55) !important;
-    padding: 3px 6px !important;
-    border-radius: 4px !important;
-    border: 1px solid transparent !important;
-}
-.dn-data-body .column-menu-btn > button:hover {
-    color: var(--dn-gold) !important;
-    background: rgba(245, 184, 0, .12) !important;
-}
+/* Column 3-dot menu (rendered by popup.js generateModernTable) — hidden;
+   we use the Edit + Remove buttons next to each header instead. */
+.dn-data-body .column-menu-btn,
 .dn-data-body .column-menu {
-    background: #fff !important;
-    border: 1px solid var(--dn-line) !important;
-    border-radius: var(--dn-radius-sm) !important;
-    box-shadow: var(--dn-shadow) !important;
-    padding: 4px 0 !important;
-    z-index: 30 !important;
-}
-.dn-data-body .column-menu button {
-    color: var(--dn-fg) !important;
-    font-size: 12px !important;
-    padding: 6px 12px !important;
-}
-.dn-data-body .column-menu button:hover {
-    background: var(--dn-gold-50) !important;
-    color: var(--dn-ink) !important;
-}
-.dn-data-body .column-menu hr {
-    border-color: var(--dn-line) !important;
-    margin: 4px 0 !important;
+    display: none !important;
 }
 
 /* Pagination controls (rendered by popup.js generateModernTable) */

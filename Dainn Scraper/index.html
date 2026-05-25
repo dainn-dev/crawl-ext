@@ -115,7 +115,7 @@
                         </div>
                     </div>
 
-                    <div id="authMethodSection" class="dn-modal-section dn-modal-section-sub">
+                    <div id="authMethodSection" class="dn-modal-section dn-modal-section-sub hidden">
                         <h4 class="dn-modal-subsection-title"><i class="fas fa-key"></i> Drive authentication</h4>
                         <div class="dn-radio-pills">
                             <label class="dn-radio-pill">
@@ -173,7 +173,7 @@
                         </div>
                     </div>
 
-                    <div id="webhookSettingsContent" class="dn-modal-section">
+                    <div id="webhookSettingsContent" class="dn-modal-section hidden">
                         <div class="dn-field">
                             <label class="dn-modal-label">Webhook URL</label>
                             <input type="url" id="dnWebhookUrl" placeholder="https://your-api.com/webhook" class="dn-input dn-input-mono">
@@ -413,19 +413,21 @@
                 <div id="cssSelector" class="dn-selector-block hidden">
                     <div class="dn-field">
                         <label class="dn-label">Next page selector</label>
-                        <input type="text"
-                               placeholder='e.g. a[title=&quot;Next Page&quot;], button[rel=&quot;next&quot;]'
-                               list="selectorSuggestions"
-                               id="nextSelectorInput"
-                               class="dn-input dn-input-mono">
-                        <datalist id="selectorSuggestions">
-                            <option value="a[title='Next Page']">
-                            <option value="button[rel='next']">
-                        </datalist>
+                        <div class="dn-selector-input-row">
+                            <input type="text"
+                                   placeholder='e.g. a[title=&quot;Next Page&quot;], button[rel=&quot;next&quot;]'
+                                   list="selectorSuggestions"
+                                   id="nextSelectorInput"
+                                   class="dn-input dn-input-mono">
+                            <datalist id="selectorSuggestions">
+                                <option value="a[title='Next Page']">
+                                <option value="button[rel='next']">
+                            </datalist>
+                            <button id='applyNextSelector' class="dn-btn dn-btn-secondary dn-selector-apply-btn">
+                                <i class="fas fa-crosshairs"></i> Use selector
+                            </button>
+                        </div>
                     </div>
-                    <button id='applyNextSelector' class="dn-btn dn-btn-secondary" style="width:100%;">
-                        <i class="fas fa-crosshairs"></i> Use selector
-                    </button>
                     <div id="recentPicks" class="hidden"></div>
                 </div>
             </div>

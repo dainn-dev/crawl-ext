@@ -51,9 +51,8 @@
 
 		// If no global startingUrl, try to get from tab
 		if (typeof chrome !== 'undefined' && chrome.tabs) {
-			const query = tabId ? { tabIds: [tabId] } : { active: true, currentWindow: true };
-
-			chrome.tabs.query(query, function (tabs) {
+			const handleTab = function (tab) {
+				const tabs = tab ? [tab] : [];
 				if (tabs[0] && tabs[0].url) {
 					try {
 						const url = new URL(tabs[0].url);
@@ -86,7 +85,22 @@
 					titleElement.textContent = 'Dainn Scraper';
 					console.log('✅ Updated title to default');
 				}
-			});
+			};
+
+			if (tabId) {
+				chrome.tabs.get(tabId, function (tab) {
+					if (chrome.runtime.lastError) {
+						console.warn('Could not get tab', tabId, '-', chrome.runtime.lastError.message);
+						handleTab(null);
+						return;
+					}
+					handleTab(tab);
+				});
+			} else {
+				chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+					handleTab(tabs && tabs[0]);
+				});
+			}
 		} else {
 			// Fallback for when chrome.tabs is not available
 			titleElement.textContent = 'Dainn Scraper';
@@ -383,16 +397,13 @@
 						selector: nextSelectorValue
 					}, function (response) {
 						if (chrome.runtime.lastError) {
-							console.error('❌ Error checking next page:', chrome.runtime.lastError);
-							console.error('❌ Error details:', chrome.runtime.lastError.message);
-							// Fallback to basic check - assume ready state
-							console.log('⚠️ Content script communication failed, assuming ready state');
+							console.warn('Next-page check skipped — content script not reachable on tab', tabs[0].id, '-', chrome.runtime.lastError.message);
 							updateStatusBadge('ready');
 							return;
 						}
-						
+
 						console.log('📡 Response from content script:', response);
-						
+
 						if (response && response.exists) {
 							console.log('✅ Next page exists');
 							updateStatusBadge('ready');
@@ -417,39 +428,44 @@
 	// Enhanced function to update status badge
 	function updateStatusBadge(status) {
 		console.log('🔍 Updating status badge to:', status);
-		
-		const statusBadge = document.querySelector('.bg-green-100, .bg-blue-100, .bg-yellow-100, .bg-red-100');
+
+		const statusBadge = document.getElementById('dnHeaderStatus')
+			|| document.querySelector('.bg-green-100, .bg-blue-100, .bg-yellow-100, .bg-red-100');
 		if (statusBadge) {
-			// Remove all possible status classes
+			// Reset brand state classes
+			statusBadge.classList.remove('is-running', 'is-error', 'is-warn');
+			// Also strip legacy Tailwind classes if the element happens to be the old badge
 			statusBadge.classList.remove('bg-green-100', 'text-green-800', 'bg-blue-100', 'text-blue-800', 'bg-yellow-100', 'text-yellow-800', 'bg-red-100', 'text-red-800');
-			
+
 			switch (status) {
 				case 'scraping':
-					statusBadge.classList.add('bg-blue-100', 'text-blue-800');
-					statusBadge.textContent = 'Scraping...';
+					statusBadge.classList.add('is-running');
+					statusBadge.textContent = 'Scraping…';
 					break;
 				case 'ready':
-					statusBadge.classList.add('bg-green-100', 'text-green-800');
 					statusBadge.textContent = 'Ready';
 					break;
 				case 'no-pages':
-					statusBadge.classList.add('bg-yellow-100', 'text-yellow-800');
-					statusBadge.textContent = 'No More Pages';
+					statusBadge.classList.add('is-warn');
+					statusBadge.textContent = 'No more pages';
 					break;
 				case 'error':
-					statusBadge.classList.add('bg-red-100', 'text-red-800');
+					statusBadge.classList.add('is-error');
 					statusBadge.textContent = 'Error';
 					break;
-				// case 'last-page':
-				// 	statusBadge.classList.add('bg-green-100', 'text-green-800');
-				// 	statusBadge.textContent = 'Completed';
-				// 	break;
 				default:
-					statusBadge.classList.add('bg-green-100', 'text-green-800');
 					statusBadge.textContent = 'Ready';
 			}
 		}
-		
+
+		// Show the "Reload page" button only when the page is stuck on
+		// no-pages or in an error state — reloading clears both cases.
+		const reloadBtn = document.getElementById('dnReloadPage');
+		if (reloadBtn) {
+			const showReload = (status === 'no-pages' || status === 'error');
+			reloadBtn.classList.toggle('hidden', !showReload);
+		}
+
 		// Update status text based on status
 		updateStatusText(status);
 	}
@@ -490,102 +506,1012 @@
 		}
 	}
 
+	// Track picker mode locally so the button can toggle to cancel.
+	let isPickerActive = false;
+
+	function setPickerButtonState(state) {
+		if (!applyNextSelector) return;
+		applyNextSelector.classList.remove('picker-state-picking', 'picker-state-success');
+		if (state === 'picking') {
+			applyNextSelector.classList.add('picker-state-picking');
+			applyNextSelector.innerHTML = '<i class="fas fa-crosshairs mr-2"></i>Picking… (click to cancel)';
+		} else if (state === 'success') {
+			applyNextSelector.classList.add('picker-state-success');
+			applyNextSelector.innerHTML = '<i class="fas fa-check mr-2"></i>Captured';
+		} else {
+			applyNextSelector.textContent = 'Use selector';
+		}
+	}
+
+	// Resolve the target web-page tab. Dainn runs in a separate popup window
+	// (see background.js), so the target tab id is passed via ?tabid=N in the URL.
+	// chrome.tabs.query({active,currentWindow}) from this window would return the
+	// popup itself, which has no content script — that's the bug that causes
+	// "Could not reach the page".
+	function resolveTargetTabId(cb) {
+		const result = getCurrentTabId();
+		if (result && typeof result.then === 'function') {
+			result.then(id => cb(id || null));
+		} else {
+			cb(result || null);
+		}
+	}
+
+	function sendToActiveTab(message, cb) {
+		if (typeof chrome === 'undefined' || !chrome.tabs) {
+			if (cb) cb(null, new Error('Chrome tabs API not available'));
+			return;
+		}
+		resolveTargetTabId(function (tabId) {
+			if (!tabId) {
+				if (cb) cb(null, new Error('No target tab found. Re-open Dainn from the tab you want to scrape.'));
+				return;
+			}
+			chrome.tabs.sendMessage(tabId, message, function (response) {
+				if (chrome.runtime.lastError) {
+					if (cb) cb(null, chrome.runtime.lastError);
+					return;
+				}
+				if (cb) cb(response, null);
+			});
+		});
+	}
+
+	function cancelActivePicker() {
+		console.log('🛑 Cancelling active picker');
+		sendToActiveTab({ action: 'cancelPicker' }, function () {
+			// The pending getNextButton callback will resolve with { cancelled: true }
+			// and reset the button state. Nothing more needed here.
+		});
+	}
+
+	function startPicker() {
+		console.log('🎯 Starting element picker');
+		isPickerActive = true;
+		setPickerButtonState('picking');
+		showScrapingNotification('Switch to your tab and click an element. Press ESC to cancel.', 'info');
+
+		sendToActiveTab({ action: 'getNextButton' }, function (response, err) {
+			isPickerActive = false;
+
+			if (err) {
+				console.error('❌ Picker error:', err);
+				setPickerButtonState('default');
+				showScrapingNotification('Could not start picker. Open this from the tab you want to scrape.', 'error');
+				return;
+			}
+
+			if (response && response.cancelled) {
+				console.log('🛑 Picker cancelled');
+				setPickerButtonState('default');
+				return;
+			}
+
+			if (response && response.selector) {
+				console.log('✅ Selector captured:', response.selector);
+				if (nextSelectorInput) nextSelectorInput.value = response.selector;
+				if (typeof localStorage !== 'undefined') {
+					localStorage.setItem('nextSelector', response.selector);
+				}
+				saveRecentPick(response.selector);
+				setPickerButtonState('success');
+				showScrapingNotification('Selector captured', 'success');
+				setTimeout(() => setPickerButtonState('default'), 2000);
+				setTimeout(() => updateStatusBadgeWithNextPage(), 800);
+				return;
+			}
+
+			// Unknown / empty response
+			setPickerButtonState('default');
+			showScrapingNotification('No selector received. Try again.', 'warning');
+		});
+	}
+
+	function validateSelector(selectorValue) {
+		console.log('🔍 Validating selector:', selectorValue);
+		showScrapingNotification('Validating selector…', 'info');
+		sendToActiveTab({ action: 'markNextButton', selector: selectorValue }, function (response, err) {
+			if (err) {
+				console.error('❌ Validation error:', err);
+				showScrapingNotification('Error validating selector', 'error');
+				return;
+			}
+			if (response && response.error) {
+				console.error('❌ Selector validation failed:', response.error);
+				showScrapingNotification('Selector validation failed: ' + response.error, 'error');
+				return;
+			}
+			console.log('✅ Selector validated');
+			showScrapingNotification('Selector validated', 'success');
+			if (typeof localStorage !== 'undefined') {
+				localStorage.setItem('nextSelector', selectorValue);
+			}
+			saveRecentPick(selectorValue);
+		});
+	}
+
 	// Function to handle "Use selector" functionality
 	function handleUseSelectorClick() {
-		console.log('🔍 Use selector clicked');
+		console.log('🔍 Use selector clicked. pickerActive=', isPickerActive);
+
+		// If picker is already running, the button acts as a cancel control.
+		if (isPickerActive) {
+			cancelActivePicker();
+			return;
+		}
 
 		const selectorValue = nextSelectorInput ? nextSelectorInput.value.trim() : '';
-
 		if (!selectorValue) {
-			// No selector value, activate element picker mode
-			console.log('🔍 No selector value, activating element picker');
-			showScrapingNotification('Click on the "Next" button or link on the webpage', 'info');
-
-			// Check if we're in extension context and can communicate with content script
-			if (typeof chrome !== 'undefined' && chrome.tabs) {
-				// Get current active tab
-				chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-					if (tabs[0]) {
-						console.log('🔍 Sending getNextButton message to tab:', tabs[0].id);
-						chrome.tabs.sendMessage(tabs[0].id, { action: "getNextButton" }, function (response) {
-							if (chrome.runtime.lastError) {
-								console.error('❌ Error communicating with content script:', chrome.runtime.lastError);
-								showScrapingNotification('Error: Could not activate element picker. Make sure you are on the page you want to scrape.', 'error');
-								return;
-							}
-
-							if (response && response.selector) {
-								console.log('✅ Got selector from content script:', response.selector);
-								if (nextSelectorInput) {
-									nextSelectorInput.value = response.selector;
-									showScrapingNotification('Selector captured: ' + response.selector, 'success');
-									
-									// Check if next page exists with the new selector
-									setTimeout(() => {
-										updateStatusBadgeWithNextPage();
-									}, 1000);
-								}
-								else {
-									console.error('❌ nextSelectorInput element not found');
-									showScrapingNotification('Error: Input field not found', 'error');
-								}
-								// Mark the next button visually
-								chrome.tabs.sendMessage(tabs[0].id, {
-									action: "markNextButton",
-									selector: response.selector
-								});
-							} else {
-								console.log('❌ No selector received from content script');
-								showScrapingNotification('No selector received. Please try clicking on the next button.', 'warning');
-							}
-						});
-					} else {
-						console.error('❌ No active tab found');
-						showScrapingNotification('Error: No active tab found', 'error');
-					}
-				});
-			} else {
-				console.error('❌ Chrome tabs API not available');
-				showScrapingNotification('Error: Extension APIs not available. Make sure this is running as a Chrome extension.', 'error');
-			}
+			startPicker();
 		} else {
-			// Selector value exists, validate it
-			console.log('🔍 Validating selector:', selectorValue);
-			showScrapingNotification('Validating selector: ' + selectorValue, 'info');
+			validateSelector(selectorValue);
+		}
+	}
 
-			if (typeof chrome !== 'undefined' && chrome.tabs) {
-				chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-					if (tabs[0]) {
-						chrome.tabs.sendMessage(tabs[0].id, {
-							action: "markNextButton",
-							selector: selectorValue
-						}, function (response) {
-							if (chrome.runtime.lastError) {
-								console.error('❌ Error validating selector:', chrome.runtime.lastError);
-								showScrapingNotification('Error validating selector', 'error');
-								return;
-							}
+	// --- Recent picks ---
+	const RECENT_PICKS_KEY = 'dainn:recentPicks';
+	const RECENT_PICKS_MAX = 6;
 
-							if (response && response.error) {
-								console.error('❌ Selector validation failed:', response.error);
-								showScrapingNotification('Selector validation failed: ' + response.error, 'error');
-							} else {
-								console.log('✅ Selector validated successfully');
-								showScrapingNotification('Selector validated successfully!', 'success');
+	function getRecentPicks() {
+		if (typeof localStorage === 'undefined') return [];
+		try {
+			const raw = localStorage.getItem(RECENT_PICKS_KEY);
+			const list = raw ? JSON.parse(raw) : [];
+			return Array.isArray(list) ? list : [];
+		} catch (e) {
+			return [];
+		}
+	}
 
-								// Store the selector for future use
-								if (typeof localStorage !== 'undefined') {
-									localStorage.setItem('nextSelector', selectorValue);
-								}
-							}
-						});
+	function saveRecentPick(selector) {
+		if (!selector || typeof localStorage === 'undefined') return;
+		const list = getRecentPicks().filter(s => s !== selector);
+		list.unshift(selector);
+		const trimmed = list.slice(0, RECENT_PICKS_MAX);
+		try {
+			localStorage.setItem(RECENT_PICKS_KEY, JSON.stringify(trimmed));
+		} catch (e) {}
+		renderRecentPicks();
+	}
+
+	function removeRecentPick(selector) {
+		if (typeof localStorage === 'undefined') return;
+		const list = getRecentPicks().filter(s => s !== selector);
+		try {
+			localStorage.setItem(RECENT_PICKS_KEY, JSON.stringify(list));
+		} catch (e) {}
+		renderRecentPicks();
+	}
+
+	function renderRecentPicks() {
+		const container = document.getElementById('recentPicks');
+		if (!container) return;
+		const list = getRecentPicks();
+		if (!list.length) {
+			container.classList.add('hidden');
+			container.innerHTML = '';
+			return;
+		}
+		container.classList.remove('hidden');
+		const items = list.map(sel => {
+			const safe = sel.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+			return `
+				<div class="recent-pick-row">
+					<button type="button" class="recent-pick" title="${safe}" data-selector="${safe}">${safe}</button>
+					<button type="button" class="recent-pick-remove" title="Remove" data-selector="${safe}">
+						<i class="fas fa-times"></i>
+					</button>
+				</div>
+			`;
+		}).join('');
+		container.innerHTML = `
+			<div class="recent-picks-wrap">
+				<div class="recent-picks-label">Recent picks</div>
+				${items}
+			</div>
+		`;
+		container.querySelectorAll('.recent-pick').forEach(btn => {
+			btn.addEventListener('click', function () {
+				const sel = this.getAttribute('data-selector');
+				if (nextSelectorInput && sel) {
+					nextSelectorInput.value = sel;
+					nextSelectorInput.dispatchEvent(new Event('input'));
+					nextSelectorInput.focus();
+				}
+			});
+		});
+		container.querySelectorAll('.recent-pick-remove').forEach(btn => {
+			btn.addEventListener('click', function (e) {
+				e.stopPropagation();
+				removeRecentPick(this.getAttribute('data-selector'));
+			});
+		});
+	}
+
+	// =====================================================
+	// Wizard navigation (Setup → Preview → Run)
+	// =====================================================
+	const DN_STEPS = ['1', '2', '3'];
+	const dnReachable = new Set(['1']); // Step 1 always reachable
+	let dnCurrentStep = '1';
+
+	function dnGetSteps() {
+		return {
+			pills: document.querySelectorAll('#dnStepper .dn-step-pill'),
+			sections: document.querySelectorAll('.dn-step[data-step]')
+		};
+	}
+
+	function dnGoToStep(step) {
+		step = String(step);
+		if (!DN_STEPS.includes(step)) return;
+		if (!dnReachable.has(step)) return; // gated
+		dnCurrentStep = step;
+		const { pills, sections } = dnGetSteps();
+		pills.forEach(p => {
+			const s = p.getAttribute('data-step');
+			p.classList.remove('is-active');
+			p.classList.toggle('is-reachable', dnReachable.has(s));
+			p.classList.toggle('is-done', dnReachable.has(s) && Number(s) < Number(step));
+			if (s === step) p.classList.add('is-active');
+		});
+		sections.forEach(sec => {
+			sec.classList.toggle('is-active', sec.getAttribute('data-step') === step);
+		});
+		try {
+			window.scrollTo({ top: 0, behavior: 'smooth' });
+		} catch (e) {
+			window.scrollTo(0, 0);
+		}
+	}
+
+	function dnUnlockStep(step) {
+		dnReachable.add(String(step));
+		const pill = document.querySelector(`#dnStepper .dn-step-pill[data-step="${step}"]`);
+		if (pill) pill.classList.add('is-reachable');
+	}
+
+	function dnCanLeaveSetup() {
+		// If user picked CSS but selector is empty, warn them.
+		const cssRadio = document.getElementById('paginationCSS');
+		const selInput = document.getElementById('nextSelectorInput');
+		if (cssRadio && cssRadio.checked && selInput && !selInput.value.trim()) {
+			showScrapingNotification('Pick a "Next page" selector or switch to None / Infinite scroll.', 'warning');
+			return false;
+		}
+		return true;
+	}
+
+	function dnInitWizard() {
+		// Next buttons
+		document.querySelectorAll('[data-dn-next]').forEach(btn => {
+			btn.addEventListener('click', function () {
+				const target = this.getAttribute('data-dn-next');
+				if (dnCurrentStep === '1' && !dnCanLeaveSetup()) return;
+				dnUnlockStep(target);
+				dnGoToStep(target);
+			});
+		});
+		// Back buttons
+		document.querySelectorAll('[data-dn-back]').forEach(btn => {
+			btn.addEventListener('click', function () {
+				const target = this.getAttribute('data-dn-back');
+				dnUnlockStep(target);
+				dnGoToStep(target);
+			});
+		});
+		// Click on stepper pills (only reachable)
+		document.querySelectorAll('#dnStepper .dn-step-pill').forEach(pill => {
+			pill.addEventListener('click', function () {
+				const s = this.getAttribute('data-step');
+				if (dnReachable.has(s)) dnGoToStep(s);
+			});
+		});
+	}
+
+	// Highlight the radio card whose <input> is checked.
+	function dnSyncRadioCards() {
+		document.querySelectorAll('.dn-radio-card').forEach(card => {
+			const radio = card.querySelector('input[type="radio"]');
+			if (radio) card.classList.toggle('is-checked', radio.checked);
+		});
+	}
+	function dnInitRadioCards() {
+		document.querySelectorAll('.dn-radio-card input[type="radio"]').forEach(r => {
+			r.addEventListener('change', dnSyncRadioCards);
+		});
+		dnSyncRadioCards();
+	}
+
+	// Expose for debugging
+	window.dnGoToStep = dnGoToStep;
+
+	// =====================================================
+	// Settings modal — tab switching
+	// =====================================================
+	function dnSwitchSettingsTab(tabName) {
+		document.querySelectorAll('#dnSettingsTabs .dn-modal-tab').forEach(btn => {
+			const isMatch = btn.getAttribute('data-dn-tab') === tabName;
+			btn.classList.toggle('is-active', isMatch);
+			btn.setAttribute('aria-selected', isMatch ? 'true' : 'false');
+		});
+		document.querySelectorAll('.dn-modal-pane[data-dn-pane]').forEach(pane => {
+			pane.classList.toggle('is-active', pane.getAttribute('data-dn-pane') === tabName);
+		});
+	}
+
+	function dnInitSettingsTabs() {
+		document.querySelectorAll('#dnSettingsTabs .dn-modal-tab').forEach(btn => {
+			btn.addEventListener('click', function () {
+				dnSwitchSettingsTab(this.getAttribute('data-dn-tab'));
+			});
+		});
+	}
+
+	// =====================================================
+	// Reload target page (shown when status = no-pages / error)
+	// =====================================================
+	function dnInitReloadPageButton() {
+		const btn = document.getElementById('dnReloadPage');
+		if (!btn) return;
+		btn.addEventListener('click', function () {
+			if (btn.disabled) return;
+			resolveTargetTabId(function (tabId) {
+				if (!tabId) {
+					showScrapingNotification('No target tab found. Re-open Dainn from the page you want to scrape.', 'error');
+					return;
+				}
+				btn.disabled = true;
+				btn.classList.add('is-spinning');
+				const labelEl = btn.querySelector('span');
+				const prevLabel = labelEl ? labelEl.textContent : '';
+				if (labelEl) labelEl.textContent = 'Reloading…';
+
+				chrome.tabs.reload(tabId, { bypassCache: false }, function () {
+					if (chrome.runtime.lastError) {
+						console.error('Reload failed:', chrome.runtime.lastError);
+						showScrapingNotification('Reload failed: ' + chrome.runtime.lastError.message, 'error');
+					} else {
+						showScrapingNotification('Page reloaded. Checking for next page…', 'info');
 					}
+					// Give the page a moment to load + content script to re-inject,
+					// then re-evaluate the next-page selector to refresh status.
+					setTimeout(() => {
+						btn.disabled = false;
+						btn.classList.remove('is-spinning');
+						if (labelEl) labelEl.textContent = prevLabel || 'Reload page';
+						if (typeof updateStatusBadgeWithNextPage === 'function') {
+							updateStatusBadgeWithNextPage();
+						}
+					}, 1800);
 				});
-			} else {
-				console.error('❌ Chrome tabs API not available for validation');
-				showScrapingNotification('Warning: Cannot validate selector - extension APIs not available', 'warning');
+			});
+		});
+	}
+
+	// =====================================================
+	// Test webhook — POST a sample payload to the configured URL
+	// =====================================================
+	function dnSetTestWebhookFeedback(state, message) {
+		const fb = document.getElementById('dnTestWebhookFeedback');
+		if (!fb) return;
+		fb.classList.remove('hidden', 'is-loading', 'is-success', 'is-error');
+		if (!state) { fb.classList.add('hidden'); fb.innerHTML = ''; return; }
+		const cls = 'is-' + state;
+		const icon = state === 'loading' ? 'fa-spinner fa-spin'
+			: state === 'success' ? 'fa-circle-check'
+			: 'fa-circle-exclamation';
+		fb.classList.add(cls);
+		fb.innerHTML = `<i class="fas ${icon}"></i> ${message}`;
+	}
+
+	function dnGetSelectedWebhookAuth() {
+		const checked = document.querySelector('input[name="webhookAuth"]:checked');
+		return checked ? checked.value : 'none';
+	}
+
+	// =====================================================
+	// Webhook auth fields — show only the relevant credential block
+	// based on the currently selected auth radio.
+	// =====================================================
+	function dnSyncWebhookAuthFields() {
+		const method = dnGetSelectedWebhookAuth();
+		const map = {
+			basic:  'dnAuthBasicFields',
+			bearer: 'dnAuthBearerFields',
+			api:    'dnAuthApiFields'
+		};
+		Object.keys(map).forEach(key => {
+			const el = document.getElementById(map[key]);
+			if (el) el.classList.toggle('hidden', method !== key);
+		});
+	}
+	function dnInitWebhookAuthFields() {
+		document.querySelectorAll('input[name="webhookAuth"]').forEach(r => {
+			r.addEventListener('change', dnSyncWebhookAuthFields);
+		});
+		dnSyncWebhookAuthFields();
+	}
+
+	// =====================================================
+	// Webhook dispatcher — fires a real HTTP POST to the configured URL
+	// when the named event is triggered (and enabled in settings).
+	// =====================================================
+	const DN_WEBHOOK_EVENT_TO_TRIGGER = {
+		scraping_started:   'scrapingStarted',
+		scraping_completed: 'scrapingCompleted',
+		page_completed:     'pageCompleted',
+		error_occurred:     'errorOccurred'
+	};
+
+	function dnReadWebhookSettings(cb) {
+		if (!chrome?.storage?.sync) { cb(null); return; }
+		chrome.storage.sync.get(['scrapperSettings'], function (result) {
+			if (chrome.runtime.lastError) { cb(null); return; }
+			cb((result && result.scrapperSettings && result.scrapperSettings.webhooks) || null);
+		});
+	}
+
+	function dnBuildAuthHeaders(authMethod, credentials) {
+		const headers = {};
+		const creds = credentials || {};
+		if (authMethod === 'basic' && creds.basic && creds.basic.username) {
+			headers['Authorization'] = 'Basic ' + btoa(`${creds.basic.username}:${creds.basic.password || ''}`);
+		} else if (authMethod === 'bearer' && creds.bearer && creds.bearer.token) {
+			headers['Authorization'] = 'Bearer ' + creds.bearer.token;
+		} else if (authMethod === 'api' && creds.api && creds.api.header && creds.api.value) {
+			headers[creds.api.header] = creds.api.value;
+		}
+		return headers;
+	}
+
+	function dnCollectScrapeStats() {
+		const itemsEl = document.querySelector('.dn-stat .text-blue-600');
+		const pagesEl = document.querySelector('.dn-stat .text-green-600');
+		const timeEl  = document.querySelector('.dn-stat .text-purple-600');
+		return {
+			itemsScraped: parseInt((itemsEl && itemsEl.textContent) || '0', 10) || 0,
+			pagesCrawled: parseInt((pagesEl && pagesEl.textContent) || '0', 10) || 0,
+			workingTime: (timeEl && timeEl.textContent) || '00:00:00',
+			targetUrl: (window.s && window.s.startingUrl) || null,
+			hostname:  (window.s && window.s.hostName)    || null
+		};
+	}
+
+	function dnFireWebhook(eventKey, extra) {
+		dnReadWebhookSettings(function (cfg) {
+			if (!cfg || !cfg.enabled || !cfg.url) return;
+			const triggerKey = DN_WEBHOOK_EVENT_TO_TRIGGER[eventKey];
+			if (!triggerKey || !cfg.triggers || !cfg.triggers[triggerKey]) return;
+
+			let parsed;
+			try { parsed = new URL(cfg.url); } catch (e) { console.warn('Webhook URL invalid:', cfg.url); return; }
+			if (!/^https?:$/.test(parsed.protocol)) return;
+
+			const payload = {
+				event: eventKey,
+				source: 'Dainn Scraper',
+				version: '0.1.1',
+				timestamp: new Date().toISOString(),
+				stats: dnCollectScrapeStats(),
+				data: extra || {}
+			};
+
+			const headers = Object.assign(
+				{ 'Content-Type': 'application/json' },
+				dnBuildAuthHeaders(cfg.authentication || 'none', cfg.credentials)
+			);
+
+			console.log(`📡 Firing webhook [${eventKey}] →`, cfg.url);
+			fetch(cfg.url, {
+				method: 'POST',
+				mode: 'cors',
+				headers: headers,
+				body: JSON.stringify(payload)
+			}).then(resp => {
+				if (resp.ok) {
+					console.log(`✅ Webhook [${eventKey}] delivered (HTTP ${resp.status})`);
+				} else {
+					console.warn(`⚠️ Webhook [${eventKey}] returned HTTP ${resp.status}`);
+				}
+			}).catch(err => {
+				console.warn(`❌ Webhook [${eventKey}] failed:`, err && err.message);
+			});
+		});
+	}
+	window.dnFireWebhook = dnFireWebhook;
+
+	// =====================================================
+	// DOM observers that translate UI state changes into webhook events.
+	// Decouples webhook dispatch from popup.js' minified scrape loop.
+	// =====================================================
+	function dnInitWebhookObservers() {
+		const stopBtn   = document.getElementById('stopScraping');
+		const pagesStat = document.querySelector('.dn-stat .text-green-600');
+		const headerStatus = document.getElementById('dnHeaderStatus');
+		if (!stopBtn || !pagesStat) return;
+
+		let scrapingActive = false;
+		let lastPageCount  = 0;
+		let errorReportedForRun = false;
+
+		// scraping_started / scraping_completed — derived from stopBtn visibility
+		new MutationObserver(() => {
+			const running = !stopBtn.classList.contains('hidden');
+			if (running && !scrapingActive) {
+				scrapingActive = true;
+				lastPageCount = parseInt(pagesStat.textContent || '0', 10) || 0;
+				errorReportedForRun = false;
+				dnFireWebhook('scraping_started');
+			} else if (!running && scrapingActive) {
+				scrapingActive = false;
+				dnFireWebhook('scraping_completed');
+			}
+		}).observe(stopBtn, { attributes: true, attributeFilter: ['class'] });
+
+		// page_completed — page counter incremented while scraping
+		new MutationObserver(() => {
+			if (!scrapingActive) return;
+			const newCount = parseInt(pagesStat.textContent || '0', 10) || 0;
+			if (newCount > lastPageCount) {
+				lastPageCount = newCount;
+				dnFireWebhook('page_completed', { pageNumber: newCount });
+			}
+		}).observe(pagesStat, { characterData: true, childList: true, subtree: true });
+
+		// error_occurred — header badge enters is-error state (only fire once per run)
+		if (headerStatus) {
+			new MutationObserver(() => {
+				if (!scrapingActive || errorReportedForRun) return;
+				if (headerStatus.classList.contains('is-error')) {
+					errorReportedForRun = true;
+					dnFireWebhook('error_occurred', { message: headerStatus.textContent });
+				}
+			}).observe(headerStatus, { attributes: true, attributeFilter: ['class'] });
+		}
+	}
+
+	function dnInitTestWebhook() {
+		const btn = document.getElementById('dnTestWebhook');
+		if (!btn) return;
+		btn.addEventListener('click', async function () {
+			const urlInput = document.getElementById('dnWebhookUrl');
+			const url = urlInput ? urlInput.value.trim() : '';
+
+			if (!url) {
+				dnSetTestWebhookFeedback('error', 'Enter a webhook URL first');
+				if (urlInput) urlInput.focus();
+				return;
+			}
+			let parsedUrl;
+			try {
+				parsedUrl = new URL(url);
+				if (!/^https?:$/.test(parsedUrl.protocol)) throw new Error('Only http(s) URLs are allowed');
+			} catch (e) {
+				dnSetTestWebhookFeedback('error', 'Invalid URL: ' + (e.message || 'parse failed'));
+				return;
+			}
+
+			const authMethod = dnGetSelectedWebhookAuth();
+			const credentials = getWebhookCredentials();
+			const payload = {
+				event: 'test',
+				source: 'Dainn Scraper',
+				version: '0.1.1',
+				timestamp: new Date().toISOString(),
+				authMethod: authMethod,
+				message: 'This is a test ping from Dainn Scraper. If you can see this, your webhook is reachable.'
+			};
+
+			btn.disabled = true;
+			const originalHTML = btn.innerHTML;
+			btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending…';
+			dnSetTestWebhookFeedback('loading', 'Sending test ping…');
+
+			const startedAt = performance.now();
+			try {
+				const response = await fetch(url, {
+					method: 'POST',
+					mode: 'cors',
+					headers: Object.assign(
+						{ 'Content-Type': 'application/json' },
+						dnBuildAuthHeaders(authMethod, credentials)
+					),
+					body: JSON.stringify(payload)
+				});
+				const elapsed = Math.round(performance.now() - startedAt);
+				if (response.ok) {
+					dnSetTestWebhookFeedback('success', `Delivered (HTTP ${response.status}) in ${elapsed} ms`);
+				} else {
+					dnSetTestWebhookFeedback('error', `Server returned HTTP ${response.status} after ${elapsed} ms`);
+				}
+			} catch (err) {
+				const elapsed = Math.round(performance.now() - startedAt);
+				// CORS / network errors land here. Be specific because users
+				// often hit CORS first time.
+				const isLikelyCors = String(err && err.message).toLowerCase().includes('failed to fetch');
+				dnSetTestWebhookFeedback('error',
+					isLikelyCors
+						? `Could not reach server (likely CORS or offline) after ${elapsed} ms`
+						: `Request failed: ${err && err.message ? err.message : 'unknown error'}`
+				);
+			} finally {
+				btn.disabled = false;
+				btn.innerHTML = originalHTML;
+			}
+		});
+	}
+
+	// =====================================================
+	// Preview (Step 2): fetch first page only
+	// =====================================================
+	let dnPreviewLoaded = false;
+	let dnPreviewTableId = 0;
+	let dnPreviewTableCount = 0;
+
+	function dnEscapeHTML(s) {
+		if (s == null) return '';
+		return String(s)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;');
+	}
+
+	function dnFormatCell(v) {
+		if (v == null) return '';
+		let s = String(v).trim();
+		// Truncate very long values for preview
+		if (s.length > 120) s = s.slice(0, 117) + '…';
+		return dnEscapeHTML(s);
+	}
+
+	function dnRenderPreviewError(message) {
+		const result = document.getElementById('dnPreviewResult');
+		if (!result) return;
+		result.classList.remove('hidden');
+		document.getElementById('dnPreviewMeta').innerHTML =
+			`<span style="color: var(--dn-danger); font-weight:500;"><i class="fas fa-circle-exclamation"></i> ${dnEscapeHTML(message)}</span>`;
+		const body = result.querySelector('.dn-data-body');
+		if (body) {
+			body.innerHTML = `
+				<div class="dn-empty">
+					<i class="fas fa-circle-exclamation" style="color: var(--dn-danger);"></i>
+					<div class="dn-empty-title">Could not preview</div>
+					<div class="dn-empty-desc">${dnEscapeHTML(message)}</div>
+				</div>`;
+		}
+	}
+
+	// Convert an auto-detected field name like
+	// "/MAT-CELL.MAT-MDC-CELL.MDC-DATA-TABLE__CELL.CDK-CELL.CDK-COLUMN-MERCHANTID.MAT-COLUMN-MERCHANTID"
+	// into a friendlier short label like "merchantid" — using the last segment
+	// after the final dot/slash, stripped of common prefixes.
+	function dnShortHeader(name) {
+		if (!name) return '';
+		let s = String(name).trim();
+		// Take the last segment after / or .
+		const parts = s.split(/[/.]/).filter(Boolean);
+		if (parts.length > 1) s = parts[parts.length - 1];
+		// Strip common Angular/Material prefixes
+		s = s.replace(/^(MAT|MDC|CDK|NG|XAP)-/i, '')
+			 .replace(/^(MAT|MDC|CDK)-COLUMN-/i, '')
+			 .replace(/^MAT-MDC-CELL/i, 'cell')
+			 .replace(/^CDK-/i, '')
+			 .replace(/^MAT-/i, '');
+		return s.toLowerCase();
+	}
+
+	function dnRenderPreviewTable(rows, tableSelector) {
+		const result = document.getElementById('dnPreviewResult');
+		if (!result) return;
+		result.classList.remove('hidden');
+
+		const meta = document.getElementById('dnPreviewMeta');
+		if (!rows || !rows.length) {
+			meta.innerHTML = '<i class="fas fa-circle-info"></i> No rows detected on this page.';
+			result.querySelector('.dn-data-body').innerHTML = `
+				<div class="dn-empty">
+					<i class="fas fa-table"></i>
+					<div class="dn-empty-title">No rows detected</div>
+					<div class="dn-empty-desc">The page may not contain a list-like structure. Try going back and adjusting your setup.</div>
+				</div>`;
+			return;
+		}
+
+		// Apply the same field-filtering pipeline that the Run step uses, so
+		// preview shows the exact columns the user will end up with (drops
+		// noise/duplicate columns, respects user renames). Falls back to raw
+		// object keys if popup.js hasn't exposed the filter yet.
+		let headers, dataRows;
+		if (typeof window.dnFilterTableData === 'function') {
+			try {
+				const filtered = window.dnFilterTableData(rows);
+				headers = filtered.fields || [];
+				dataRows = filtered.data || [];
+			} catch (e) {
+				console.warn('Preview filter failed, falling back to raw:', e);
 			}
 		}
+		if (!headers) {
+			// Fallback: raw object keys
+			const seen = new Set();
+			headers = [];
+			rows.forEach(r => Object.keys(r).forEach(k => {
+				if (!seen.has(k)) { seen.add(k); headers.push(k); }
+			}));
+			dataRows = rows.map(r => headers.map(h => r[h]));
+		}
+
+		const totalRows = dataRows.length;
+		const totalCols = headers.length;
+
+		const candidateLabel = dnPreviewTableCount > 1
+			? `<span class="dn-preview-candidate">Table <b>${dnPreviewTableId + 1}</b> of <b>${dnPreviewTableCount}</b></span>`
+			: '';
+		const tryAnotherBtn = dnPreviewTableCount > 1
+			? `<button type="button" id="dnTryAnotherTable" class="dn-btn dn-btn-secondary dn-try-another"><i class="fas fa-shuffle"></i> Try another table</button>`
+			: '';
+
+		meta.innerHTML = `
+			<div class="dn-preview-meta-row">
+				<div class="dn-preview-meta-text">
+					<i class="fas fa-circle-check" style="color: var(--dn-success);"></i>
+					Detected <b>${totalRows}</b> ${totalRows === 1 ? 'row' : 'rows'} &middot;
+					<b>${totalCols}</b> ${totalCols === 1 ? 'column' : 'columns'}
+					${candidateLabel ? '&middot; ' + candidateLabel : ''}
+				</div>
+				${tryAnotherBtn}
+			</div>
+			${tableSelector ? `<div class="dn-preview-selector-row" title="${dnEscapeHTML(tableSelector)}">table selector: <code>${dnEscapeHTML(tableSelector.length > 200 ? tableSelector.slice(0, 197) + '…' : tableSelector)}</code></div>` : ''}
+			${dnPreviewTableCount > 1 && totalRows <= 1 ? `<div class="dn-preview-warning"><i class="fas fa-triangle-exclamation"></i> Looks like only a header was detected. Click <b>Try another table</b> until you see the rows you want.</div>` : ''}
+		`;
+
+		// Wire the cycle button (re-attached on every render)
+		const cycleBtn = document.getElementById('dnTryAnotherTable');
+		if (cycleBtn) cycleBtn.addEventListener('click', dnCycleTable);
+
+		// Render the same HTML structure as the main scraped-data table so the
+		// brand styling (.dn-data-body .resizable-table ...) applies uniformly.
+		let html = `
+			<div class="table-scroll-container relative">
+				<table class="w-full resizable-table">
+					<thead><tr>`;
+		headers.forEach(h => {
+			const shortLabel = dnShortHeader(h);
+			const fullLabel = dnEscapeHTML(h);
+			html += `<th class="resizable-column" title="${fullLabel}">
+				<div class="flex items-center justify-between pr-2">
+					<span class="header-text">${dnEscapeHTML(shortLabel)}</span>
+				</div>
+			</th>`;
+		});
+		html += '</tr></thead><tbody class="divide-y divide-gray-200">';
+		dataRows.forEach(row => {
+			html += '<tr>';
+			row.forEach(raw => {
+				const isUrl = typeof raw === 'string' && /^https?:\/\//i.test(raw.trim());
+				const cellClass = isUrl ? 'text-blue-600' : '';
+				html += `<td class="${cellClass}" title="${dnEscapeHTML(raw == null ? '' : String(raw))}">${dnFormatCell(raw)}</td>`;
+			});
+			html += '</tr>';
+		});
+		html += '</tbody></table></div>';
+		result.querySelector('.dn-data-body').innerHTML = html;
+	}
+
+	function dnFetchPreview() {
+		const btn = document.getElementById('dnPreviewFetch');
+		if (!btn || btn.disabled) return;
+		const originalHTML = btn.innerHTML;
+		btn.disabled = true;
+		btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Fetching…';
+
+		// Show a loading skeleton in the result area
+		const result = document.getElementById('dnPreviewResult');
+		if (result) {
+			result.classList.remove('hidden');
+			document.getElementById('dnPreviewMeta').innerHTML =
+				'<i class="fas fa-spinner fa-spin"></i> Detecting tables and extracting first page…';
+			const body = result.querySelector('.dn-data-body');
+			if (body) body.innerHTML = `
+				<div class="dn-empty">
+					<i class="fas fa-spinner fa-spin"></i>
+					<div class="dn-empty-title">Working…</div>
+					<div class="dn-empty-desc">Scanning the page for list-like data.</div>
+				</div>`;
+		}
+
+		function restoreBtn() {
+			btn.disabled = false;
+			btn.innerHTML = originalHTML;
+		}
+
+		if (typeof chrome === 'undefined' || !chrome.tabs) {
+			dnRenderPreviewError('Chrome tabs API not available. This must run as a Chrome extension.');
+			restoreBtn();
+			return;
+		}
+
+		resolveTargetTabId(function (tabId) {
+			if (!tabId) {
+				dnRenderPreviewError('No target tab found. Re-open Dainn from the tab you want to scrape.');
+				restoreBtn();
+				return;
+			}
+			// 1. Detect candidate tables
+			chrome.tabs.sendMessage(tabId, { action: 'findTables' }, function (findResp) {
+				if (chrome.runtime.lastError) {
+					dnRenderPreviewError('Could not reach the page. Reload the page you want to scrape and try again. (' + chrome.runtime.lastError.message + ')');
+					restoreBtn();
+					return;
+				}
+				if (!findResp || (findResp.error && !findResp.tableSelector)) {
+					dnRenderPreviewError(findResp && findResp.error ? findResp.error : 'No tables detected on the page.');
+					restoreBtn();
+					return;
+				}
+				dnPreviewTableId = (typeof findResp.tableId === 'number') ? findResp.tableId : 0;
+				dnPreviewTableCount = (typeof findResp.tableCount === 'number') ? findResp.tableCount : 1;
+				// 2. Extract data from the currently selected table
+				chrome.tabs.sendMessage(tabId, { action: 'getTableData' }, function (dataResp) {
+					if (chrome.runtime.lastError) {
+						dnRenderPreviewError('Could not extract data: ' + chrome.runtime.lastError.message);
+						restoreBtn();
+						return;
+					}
+					if (!dataResp || dataResp.error) {
+						dnRenderPreviewError((dataResp && dataResp.error) || 'Failed to extract data.');
+						restoreBtn();
+						return;
+					}
+					dnPreviewLoaded = true;
+					dnRenderPreviewTable(dataResp.data || [], dataResp.tableSelector);
+					restoreBtn();
+				});
+			});
+		});
+	}
+
+	// Cycle to the next candidate table that the content script already detected.
+	function dnCycleTable() {
+		const cycleBtn = document.getElementById('dnTryAnotherTable');
+		const originalHTML = cycleBtn ? cycleBtn.innerHTML : '';
+		if (cycleBtn) {
+			cycleBtn.disabled = true;
+			cycleBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Switching…';
+		}
+		const meta = document.getElementById('dnPreviewMeta');
+		if (meta) {
+			meta.querySelectorAll('.dn-preview-warning').forEach(w => w.remove());
+		}
+
+		function restoreCycleBtn() {
+			if (cycleBtn) {
+				cycleBtn.disabled = false;
+				cycleBtn.innerHTML = originalHTML;
+			}
+		}
+
+		resolveTargetTabId(function (tabId) {
+			if (!tabId) {
+				dnRenderPreviewError('Lost the target tab. Re-open Dainn from the source tab.');
+				restoreCycleBtn();
+				return;
+			}
+			chrome.tabs.sendMessage(tabId, { action: 'nextTable' }, function (resp) {
+				if (chrome.runtime.lastError || !resp) {
+					dnRenderPreviewError('Could not switch table: ' + ((chrome.runtime.lastError && chrome.runtime.lastError.message) || 'no response'));
+					restoreCycleBtn();
+					return;
+				}
+				if (typeof resp.tableId === 'number') dnPreviewTableId = resp.tableId;
+				if (typeof resp.tableCount === 'number') dnPreviewTableCount = resp.tableCount;
+				chrome.tabs.sendMessage(tabId, { action: 'getTableData' }, function (dataResp) {
+					if (chrome.runtime.lastError) {
+						dnRenderPreviewError('Could not extract data: ' + chrome.runtime.lastError.message);
+						restoreCycleBtn();
+						return;
+					}
+					if (!dataResp || dataResp.error) {
+						dnRenderPreviewError((dataResp && dataResp.error) || 'Failed to extract data.');
+						restoreCycleBtn();
+						return;
+					}
+					dnRenderPreviewTable(dataResp.data || [], dataResp.tableSelector);
+					restoreCycleBtn();
+				});
+			});
+		});
+	}
+
+	function dnInitPreview() {
+		const btn = document.getElementById('dnPreviewFetch');
+		if (btn) btn.addEventListener('click', dnFetchPreview);
+	}
+
+	// =====================================================
+	// Live progress (Step 3): toggle strip + mirror stats + pulse on change
+	// =====================================================
+	function dnSetProgressVisible(visible) {
+		const el = document.getElementById('dnProgress');
+		if (!el) return;
+		el.classList.toggle('hidden', !visible);
+	}
+
+	function dnPulseStat(el) {
+		if (!el) return;
+		el.classList.remove('is-pulsing');
+		// Force reflow so the animation restarts when the class is added again
+		void el.offsetWidth;
+		el.classList.add('is-pulsing');
+	}
+
+	function dnInitProgress() {
+		const stopBtn = document.getElementById('stopScraping');
+		const startBtn = document.getElementById('startScraping');
+		const progress = document.getElementById('dnProgress');
+		const headerStatus = document.getElementById('dnHeaderStatus');
+		if (!progress) return;
+
+		const itemsStat = document.querySelector('.dn-stat .text-blue-600');
+		const pagesStat = document.querySelector('.dn-stat .text-green-600');
+		const timeStat  = document.querySelector('.dn-stat .text-purple-600');
+
+		const progItems = document.getElementById('dnProgressItems');
+		const progPages = document.getElementById('dnProgressPages');
+		const progTime  = document.getElementById('dnProgressElapsed');
+
+		// Show/hide progress based on the stop button's visibility (which the
+		// existing scrape code already toggles to indicate run state).
+		function syncFromStopBtn() {
+			if (!stopBtn) return;
+			const running = !stopBtn.classList.contains('hidden');
+			dnSetProgressVisible(running);
+			if (headerStatus) {
+				if (running) {
+					headerStatus.classList.add('is-running');
+					headerStatus.classList.remove('is-error', 'is-warn');
+					if (headerStatus.textContent.trim() === 'Ready') {
+						headerStatus.textContent = 'Scraping…';
+					}
+				}
+			}
+		}
+
+		if (stopBtn) {
+			new MutationObserver(syncFromStopBtn)
+				.observe(stopBtn, { attributes: true, attributeFilter: ['class'] });
+			// Initial check in case scraping is already running on init
+			syncFromStopBtn();
+		}
+
+		// Belt-and-suspenders: also react to button clicks immediately
+		if (startBtn) startBtn.addEventListener('click', () => {
+			// Ensure we're on Step 3 when user starts crawling from anywhere
+			if (dnReachable && typeof dnGoToStep === 'function') {
+				dnReachable.add('3');
+				dnGoToStep('3');
+			}
+			setTimeout(syncFromStopBtn, 50);
+		});
+		if (stopBtn) stopBtn.addEventListener('click', () => {
+			setTimeout(syncFromStopBtn, 50);
+		});
+
+		// Mirror stat values into the progress strip and pulse on change.
+		function mirrorAndPulse(srcEl, dstEl) {
+			if (!srcEl) return;
+			const obs = new MutationObserver(() => {
+				const txt = (srcEl.textContent || '').trim();
+				if (dstEl) dstEl.textContent = txt;
+				dnPulseStat(srcEl);
+			});
+			obs.observe(srcEl, { characterData: true, childList: true, subtree: true });
+		}
+		mirrorAndPulse(itemsStat, progItems);
+		mirrorAndPulse(pagesStat, progPages);
+		mirrorAndPulse(timeStat,  progTime);
 	}
 
 	function showScrapingNotification(message, type = 'info') {
@@ -632,7 +1558,7 @@
 	function addCrawlHistoryItem(url, pageTitle = '') {
 		console.log('📝 Adding crawl history item:', url);
 
-		const historyContainer = document.querySelector('#sidebarMenu .space-y-3');
+		const historyContainer = document.getElementById('crawlHistoryContainer');
 		if (!historyContainer) {
 			console.error('❌ Crawl history container not found');
 			return null;
@@ -1114,40 +2040,31 @@
 		}
 	}
 
-	// Helper function to get webhook triggers
+	// Helper function to get webhook triggers — reads from explicit IDs.
 	function getWebhookTriggers() {
-		console.log('🔍 DEBUG: Getting webhook triggers');
-		const triggers = {
-			scrapingStarted: false,
-			errorOccurred: false,
-			scrapingCompleted: false,
-			pageCompleted: false
+		return {
+			scrapingStarted:   !!document.getElementById('dnTrigScrapingStarted')?.checked,
+			scrapingCompleted: !!document.getElementById('dnTrigScrapingCompleted')?.checked,
+			pageCompleted:     !!document.getElementById('dnTrigPageCompleted')?.checked,
+			errorOccurred:     !!document.getElementById('dnTrigErrorOccurred')?.checked
 		};
+	}
 
-		// Get all checkboxes in webhook settings
-		const webhookCheckboxes = document.querySelectorAll('#webhookSettingsContent input[type="checkbox"]');
-		console.log('🔍 DEBUG: Found webhook checkboxes:', webhookCheckboxes.length);
-
-		webhookCheckboxes.forEach((checkbox, index) => {
-			const label = checkbox.nextElementSibling;
-			if (label && label.textContent) {
-				const labelText = label.textContent.trim();
-				console.log('🔍 DEBUG: Checkbox', index, 'label:', labelText, 'checked:', checkbox.checked);
-
-				if (labelText.includes('Scraping Started')) {
-					triggers.scrapingStarted = checkbox.checked;
-				} else if (labelText.includes('Error Occurred')) {
-					triggers.errorOccurred = checkbox.checked;
-				} else if (labelText.includes('Scraping Completed')) {
-					triggers.scrapingCompleted = checkbox.checked;
-				} else if (labelText.includes('Page Completed')) {
-					triggers.pageCompleted = checkbox.checked;
-				}
+	// Helper to read auth credentials based on currently selected auth method.
+	function getWebhookCredentials() {
+		return {
+			basic: {
+				username: document.getElementById('dnAuthBasicUser')?.value || '',
+				password: document.getElementById('dnAuthBasicPass')?.value || ''
+			},
+			bearer: {
+				token: document.getElementById('dnAuthBearerToken')?.value || ''
+			},
+			api: {
+				header: document.getElementById('dnAuthApiHeader')?.value || '',
+				value:  document.getElementById('dnAuthApiValue')?.value  || ''
 			}
-		});
-
-		console.log('🔍 DEBUG: Final triggers:', triggers);
-		return triggers;
+		};
 	}
 
 	// Function to save all settings to Chrome storage
@@ -1185,9 +2102,10 @@
 			// Webhook Settings
 			webhooks: {
 				enabled: document.getElementById('enableWebhooks')?.checked || false,
-				url: document.querySelector('input[placeholder*="webhook"]')?.value || '',
+				url: document.getElementById('dnWebhookUrl')?.value || '',
 				authentication: document.querySelector('input[name="webhookAuth"]:checked')?.value || 'none',
-				triggers: getWebhookTriggers()
+				triggers: getWebhookTriggers(),
+				credentials: getWebhookCredentials()
 			},
 
 			// Timestamp
@@ -1363,26 +2281,47 @@
 				toggleWebhookSettingsContent(); // Trigger visibility logic
 			}
 
-			const webhookUrlInput = document.querySelector('input[placeholder*="webhook"]');
+			const webhookUrlInput = document.getElementById('dnWebhookUrl');
 			if (webhookUrlInput) webhookUrlInput.value = settings.webhooks.url || '';
 
-			// Webhook Authentication
+			// Webhook Authentication method
 			if (settings.webhooks.authentication) {
 				const authRadio = document.querySelector(`input[name="webhookAuth"][value="${settings.webhooks.authentication}"]`);
-				if (authRadio) authRadio.checked = true;
+				if (authRadio) {
+					authRadio.checked = true;
+					if (typeof dnSyncWebhookAuthFields === 'function') dnSyncWebhookAuthFields();
+				}
 			}
 
-			// Event Triggers
+			// Event triggers — use explicit IDs
 			if (settings.webhooks.triggers) {
-				const triggers = settings.webhooks.triggers;
-				// Note: This is a simplified approach, you might need to adjust selectors
-				document.querySelectorAll('#webhookSettingsContent input[type="checkbox"]').forEach((checkbox, index) => {
-					const label = checkbox.nextElementSibling?.textContent;
-					if (label?.includes('Scraping Started')) checkbox.checked = triggers.scrapingStarted;
-					if (label?.includes('Error Occurred')) checkbox.checked = triggers.errorOccurred;
-					if (label?.includes('Scraping Completed')) checkbox.checked = triggers.scrapingCompleted;
-					if (label?.includes('Page Completed')) checkbox.checked = triggers.pageCompleted;
+				const t = settings.webhooks.triggers;
+				const map = {
+					dnTrigScrapingStarted:   t.scrapingStarted,
+					dnTrigScrapingCompleted: t.scrapingCompleted,
+					dnTrigPageCompleted:     t.pageCompleted,
+					dnTrigErrorOccurred:     t.errorOccurred
+				};
+				Object.keys(map).forEach(id => {
+					const el = document.getElementById(id);
+					if (el) el.checked = !!map[id];
 				});
+			}
+
+			// Auth credentials
+			if (settings.webhooks.credentials) {
+				const c = settings.webhooks.credentials;
+				if (c.basic) {
+					if (document.getElementById('dnAuthBasicUser')) document.getElementById('dnAuthBasicUser').value = c.basic.username || '';
+					if (document.getElementById('dnAuthBasicPass')) document.getElementById('dnAuthBasicPass').value = c.basic.password || '';
+				}
+				if (c.bearer) {
+					if (document.getElementById('dnAuthBearerToken')) document.getElementById('dnAuthBearerToken').value = c.bearer.token || '';
+				}
+				if (c.api) {
+					if (document.getElementById('dnAuthApiHeader')) document.getElementById('dnAuthApiHeader').value = c.api.header || '';
+					if (document.getElementById('dnAuthApiValue')) document.getElementById('dnAuthApiValue').value = c.api.value || '';
+				}
 			}
 		}
 
@@ -1915,6 +2854,21 @@
 		// Load saved next selector
 		loadSavedNextSelector();
 
+		// Render recent picks list
+		renderRecentPicks();
+
+		// Wizard nav + radio cards + preview + progress + settings tabs +
+		// reload page + test webhook + auth fields + webhook event observers
+		dnInitWizard();
+		dnInitRadioCards();
+		dnInitPreview();
+		dnInitProgress();
+		dnInitSettingsTabs();
+		dnInitReloadPageButton();
+		dnInitTestWebhook();
+		dnInitWebhookAuthFields();
+		dnInitWebhookObservers();
+
 		// Load crawl history
 		loadCrawlHistory();
 
@@ -2135,10 +3089,7 @@
 						selector: nextSelectorValue
 					}, function (response) {
 						if (chrome.runtime.lastError) {
-							console.error('❌ Error checking next page:', chrome.runtime.lastError);
-							console.error('❌ Error details:', chrome.runtime.lastError.message);
-							// Fallback - assume no next page for safety
-							console.log('⚠️ Content script communication failed, assuming no next page');
+							console.warn('Next-page check skipped — content script not reachable on tab', tabs[0].id, '-', chrome.runtime.lastError.message);
 							callback(false);
 							return;
 						}

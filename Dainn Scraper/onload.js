@@ -81,13 +81,7 @@ function g(a) {
 function h(a, b) {
   var e;
   if (b) {
-      var i = function(a) {
-          for (; a.length;) {
-              if ($(a).length) return $(a);
-              a = a.split(" ").slice(1).join(" ")
-          }
-          return null
-      }(b);
+      var i = findBySelector(b);
       if (!i) return a({
           error: "Table not found"
       }), console.log("Table not found");
@@ -126,27 +120,201 @@ function h(a, b) {
   })
 }
 
+// Classes added dynamically by frameworks or this extension itself.
+// Including them in a captured selector makes it stop matching once
+// focus/hover state changes — which is what made earlier picks brittle.
+var UNSTABLE_CLASS_PATTERNS = [
+  /^cdk-/,            // Angular CDK runtime state (cdk-focused, cdk-mouse-focused, ...)
+  /^ng-/,             // Angular form/binding state (ng-touched, ng-dirty, ...)
+  /^mat-focus/,       // Material focus indicator
+  /^tablescraper-/,   // Classes this extension itself adds
+  /^is-/, /^has-/,    // Common BEM-ish state modifiers
+  /(^|-)focus(ed)?$/i,
+  /(^|-)hover(ed)?$/i,
+  /(^|-)active$/i,
+  /(^|-)selected$/i,
+  /(^|-)open(ed)?$/i,
+  /(^|-)disabled$/i
+];
+function isStableClass(c) {
+  if (!c) return false;
+  for (var i = 0; i < UNSTABLE_CLASS_PATTERNS.length; i++) {
+      if (UNSTABLE_CLASS_PATTERNS[i].test(c)) return false;
+  }
+  return true;
+}
+// An ID is considered stable unless it looks like a random hash/UUID.
+function isStableId(id) {
+  if (!id || !id.trim()) return false;
+  if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)) return false;
+  if (/^[a-z0-9]{20,}$/i.test(id)) return false;
+  return true;
+}
+
 function i(a) {
-  return $(a).parents().addBack().not("html").not("body").map(function() {
-      var a = this.tagName.toLowerCase();
-      return "string" == typeof this.id && this.id.trim() && !this.id.match(/\d+/g) ? a += b(this.id, "#") : "string" == typeof this.className && this.className.trim() && (a += b(this.className).replace(/ +/g, ".")), a
-  }).get().join(" ")
+  var parts = [];
+  var node = a;
+  while (node && node.nodeType === 1 && node.tagName) {
+      var tag = node.tagName.toLowerCase();
+      if (tag === "html" || tag === "body") break;
+      var seg = tag;
+      var id = (typeof node.id === "string") ? node.id.trim() : "";
+      var hitUniqueId = false;
+      if (isStableId(id)) {
+          var idSel = b(id, "#");
+          seg += idSel;
+          try {
+              if (document.querySelectorAll(idSel).length === 1) hitUniqueId = true;
+          } catch (e) {}
+      } else {
+          var className = "";
+          if (typeof node.className === "string") className = node.className.trim();
+          else if (node.className && typeof node.className.baseVal === "string") className = node.className.baseVal.trim();
+          if (className) {
+              var stable = className.split(/\s+/).filter(isStableClass);
+              if (stable.length) {
+                  seg += stable.map(function(c) { return b(c, "."); }).join("");
+              }
+          }
+      }
+      parts.unshift(seg);
+      if (hitUniqueId) break;
+      node = node.parentNode;
+  }
+  return parts.join(" > ");
+}
+
+var pickerActive = false;
+var pickerCallback = null;
+var pickerBanner = null;
+var pickerBadge = null;
+var pickerPreviewEl = null;
+
+function isPickerUI(el) {
+  return !!(el && el.closest && (el.closest(".tablescraper-picker-banner") || el.closest(".tablescraper-picker-badge")));
+}
+
+function teardownPicker() {
+  $("*").off("click.tps").off("mouseenter.tps").off("mousemove.tps");
+  $(document).off("keydown.tps");
+  $(window).off("scroll.tps resize.tps");
+  $(".tablescraper-hover").removeClass("tablescraper-hover");
+  if (pickerBanner && pickerBanner.parentNode) pickerBanner.parentNode.removeChild(pickerBanner);
+  if (pickerBadge && pickerBadge.parentNode) pickerBadge.parentNode.removeChild(pickerBadge);
+  document.documentElement.classList.remove("tablescraper-picker-active");
+  pickerBanner = null;
+  pickerBadge = null;
+  pickerPreviewEl = null;
+  pickerActive = false;
+}
+
+function positionBadgeFor(el) {
+  if (!pickerBadge || !el) return;
+  var rect = el.getBoundingClientRect();
+  pickerBadge.style.display = "block";
+  var top = window.scrollY + rect.bottom + 4;
+  var left = window.scrollX + rect.left;
+  // Keep badge inside viewport horizontally
+  var bw = pickerBadge.offsetWidth || 200;
+  var maxLeft = window.scrollX + document.documentElement.clientWidth - bw - 8;
+  if (left > maxLeft) left = maxLeft;
+  if (left < window.scrollX + 4) left = window.scrollX + 4;
+  pickerBadge.style.top = top + "px";
+  pickerBadge.style.left = left + "px";
 }
 
 function j(a) {
-  window.focus(), q = function(a) {
-      $(this).is($(a.target)) && ($("*").removeClass("tablescraper-hover"), $(i(this)).last().addClass("tablescraper-hover"))
+  // If a previous picker is still active, tear it down and resolve it as cancelled
+  if (pickerActive && pickerCallback) {
+      try { pickerCallback({ cancelled: true }); } catch (e) {}
+  }
+  teardownPicker();
+
+  pickerActive = true;
+  pickerCallback = a;
+  window.focus();
+  document.documentElement.classList.add("tablescraper-picker-active");
+
+  // Build banner
+  pickerBanner = document.createElement("div");
+  pickerBanner.className = "tablescraper-picker-banner";
+  var msg = document.createElement("span");
+  msg.className = "tps-msg";
+  msg.innerHTML = "Click an element to capture &nbsp;|&nbsp; press <b>ESC</b> to cancel";
+  var preview = document.createElement("span");
+  preview.className = "tps-preview";
+  pickerPreviewEl = preview;
+  var cancelBtn = document.createElement("button");
+  cancelBtn.className = "tps-cancel";
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  pickerBanner.appendChild(msg);
+  pickerBanner.appendChild(preview);
+  pickerBanner.appendChild(cancelBtn);
+  document.body.appendChild(pickerBanner);
+
+  // Build floating badge
+  pickerBadge = document.createElement("div");
+  pickerBadge.className = "tablescraper-picker-badge";
+  pickerBadge.style.display = "none";
+  document.body.appendChild(pickerBadge);
+
+  function finish(payload) {
+      var cb = pickerCallback;
+      teardownPicker();
+      pickerCallback = null;
+      if (cb) try { cb(payload); } catch (e) {}
+  }
+
+  cancelBtn.addEventListener("click", function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      finish({ cancelled: true });
+  }, true);
+
+  // ESC cancels
+  $(document).on("keydown.tps", function(e) {
+      if (e.key === "Escape" || e.keyCode === 27) {
+          e.preventDefault();
+          e.stopPropagation();
+          finish({ cancelled: true });
+      }
+  });
+
+  // Reposition badge on scroll/resize (for the last hovered element)
+  var lastHovered = null;
+  $(window).on("scroll.tps resize.tps", function() {
+      if (lastHovered) positionBadgeFor(lastHovered);
+  });
+
+  // Hover preview
+  q = function(ev) {
+      if (isPickerUI(ev.target)) return;
+      $(".tablescraper-hover").removeClass("tablescraper-hover");
+      ev.target.classList.add("tablescraper-hover");
+      lastHovered = ev.target;
+      var sel = i(ev.target);
+      if (pickerPreviewEl) pickerPreviewEl.textContent = sel;
+      if (pickerBadge) {
+          pickerBadge.textContent = sel;
+          positionBadgeFor(ev.target);
+      }
   };
-  var b = function(b) {
-      $("*").off("click", p).off("mouseenter", q), $(".tablescraper-hover").removeClass("tablescraper-hover"), $(".tablescraper-next-button").removeClass("tablescraper-next-button");
-      var c = i(b.target);
-      $(b.target).addClass("tablescraper-next-button"), console.log("Next button selector:", c), a({
-          selector: c
-      })
+
+  // Click capture — block the page's own click handlers and capture target
+  p = function(ev) {
+      if (isPickerUI(ev.target)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      var sel = i(ev.target);
+      console.log("Next button selector:", sel);
+      // Briefly mark the picked element
+      ev.target.classList.add("tablescraper-next-button");
+      finish({ selector: sel });
+      return false;
   };
-  p = function(a) {
-      return a.preventDefault(), b(a), !1
-  }, $("*").click(p).on("mouseenter", q)
+
+  $("*").on("click.tps", p).on("mouseenter.tps", q);
 }
 
 function k(a) {
@@ -158,14 +326,31 @@ function k(a) {
   d.initMouseEvent("mouseup", !0, !0, window, 1, a.x, a.y, a.x, a.y, !1, !1, !1, !1, 0, null), a.dispatchEvent(b), a.dispatchEvent(c), a.dispatchEvent(d)
 }
 
+// Resolve a selector to a jQuery set. Tries the selector as-is first
+// (so DevTools-style selectors using '>' work), then falls back to the
+// legacy left-trim strategy for space-separated descendant selectors.
+function findBySelector(sel) {
+  if (!sel) return null;
+  try {
+      var $el = $(sel);
+      if ($el.length) return $el;
+  } catch (e) {}
+  var s = sel;
+  while (s.length) {
+      var parts = s.split(/\s+/);
+      if (parts.length <= 1) break;
+      s = parts.slice(1).join(" ").replace(/^[>+~]\s*/, "").trim();
+      if (!s) break;
+      try {
+          var $el2 = $(s);
+          if ($el2.length) return $el2;
+      } catch (e) {}
+  }
+  return null;
+}
+
 function l(a, b, c) {
-  var d = function(a) {
-      for (; a.length;) {
-          if ($(a).length) return $(a);
-          a = a.split(" ").slice(1).join(" ")
-      }
-      return null
-  }(a);
+  var d = findBySelector(a);
   return d ? (d.last().addClass("tablescraper-next-button"), c ? b({}) : ($("*").off("click", p).off("mouseenter", q), void setTimeout(function() {
       k(d.last()[0]), b({})
   }, 100))) : b({
@@ -183,6 +368,7 @@ chrome.runtime.onMessage.addListener(function(a, b, c) {
       f();
       c({
           tableId: n,
+          tableCount: m.length,
           tableSelector: m[n].selector,
           href: window.location.href,
           hostname: window.location.hostname
@@ -195,6 +381,15 @@ chrome.runtime.onMessage.addListener(function(a, b, c) {
   }
   if ("getNextButton" == a.action) {
       j(c);
+      return true;
+  }
+  if ("cancelPicker" == a.action) {
+      var wasActive = pickerActive;
+      var cb = pickerCallback;
+      teardownPicker();
+      pickerCallback = null;
+      if (wasActive && cb) try { cb({ cancelled: true }); } catch (e) {}
+      c({ cancelled: wasActive });
       return true;
   }
   if ("clickNext" == a.action) {

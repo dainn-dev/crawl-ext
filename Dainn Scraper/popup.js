@@ -1558,14 +1558,21 @@ function L(e=null) {
     console.log("Scraping stopped."),
     $("#startScraping").show(),
     $("#stopScraping").hide(),
-    
+
     // Also handle modern UI button switching with Tailwind classes
     $('#stopScraping').addClass('hidden'),
     $('#startScraping').removeClass('hidden'),
-    
+
+    // Reset status badge from "Scraping..." — covers both manual and auto-stop
+    $('.bg-blue-100')
+        .removeClass('bg-blue-100 text-blue-800')
+        .addClass('bg-green-100 text-green-800')
+        .text('Completed'),
+    (typeof updateStatusBadgeWithNextPage === 'function') && updateStatusBadgeWithNextPage(),
+
     // Debug: Log button states
     console.log('Stop Crawling: Button switching - Stop hidden, Start visible'),
-    
+
     p("Crawling stopped. Please download data or continue crawling.", "instructions"),
     
     // Auto-download CSV if enabled when scraping is stopped manually
@@ -1937,7 +1944,7 @@ function checkNextPageExists(callback) {
         selector: s.nextSelector
     }, function(response) {
         if (chrome.runtime.lastError) {
-            console.error('❌ Error checking next page:', chrome.runtime.lastError);
+            console.warn('Next-page check skipped — content script not reachable on tab', i && i.id, '-', chrome.runtime.lastError.message);
             callback(false);
             return;
         }
@@ -2015,3 +2022,18 @@ function updateStatusText(nextPageExists) {
 
 // Make horizontal scroll handlers globally accessible
 window.addHorizontalScrollHandlers = addHorizontalScrollHandlers;
+
+// Expose the field-filtering pipeline so the Preview step (Step 2) can
+// render the exact same columns the Run step will produce. h() dedupes
+// columns, drops fields appearing in <20% of rows, and respects user
+// renames/deletions stored on s.config. g() applies header renames.
+// We seed s.config with safe defaults so the pipeline works even when
+// no scrape has started yet.
+window.dnFilterTableData = function (rawData) {
+    if (!s.config) {
+        s.config = { headers: {}, deletedFields: {}, crawlDelay: 1000, maxWait: 20000 };
+    }
+    var filtered = h(rawData);
+    filtered.fields = g(filtered.fields);
+    return filtered; // { fields: [name,...], data: [[v,...], ...] }
+};

@@ -460,6 +460,24 @@ chrome.runtime.onMessage.addListener(function(a, b, c) {
       });
       return true;
   }
+  if ("getPageHTML" == a.action) {
+      // Return the page's outerHTML, capped. Used by the AI-assisted
+      // setup flow — the caller (popup.js) then trims further in
+      // dn-llm.js (strips scripts/styles/svgs). Cap here as a safety
+      // net so we don't pump 5 MB across the message channel for
+      // pages like Twitter that ship megabytes of inline data-* attrs.
+      var maxChars = (a.maxChars && Number(a.maxChars)) || 200000;
+      var html = "";
+      try { html = document.documentElement.outerHTML || ""; }
+      catch (e) { html = document.body ? document.body.outerHTML : ""; }
+      if (html.length > maxChars) html = html.slice(0, maxChars) + " …[TRUNCATED]";
+      c({
+          html: html,
+          url: window.location.href,
+          title: document.title || ""
+      });
+      return true;
+  }
   c({});
   return false;
 });

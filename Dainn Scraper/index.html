@@ -57,6 +57,9 @@
                 <button type="button" class="dn-modal-tab" data-dn-tab="webhooks" role="tab" aria-selected="false">
                     <i class="fas fa-tower-broadcast"></i> Webhooks
                 </button>
+                <button type="button" class="dn-modal-tab" data-dn-tab="ai" role="tab" aria-selected="false">
+                    <i class="fas fa-wand-magic-sparkles"></i> AI
+                </button>
             </nav>
 
             <!-- Body (scrollable) -->
@@ -231,6 +234,53 @@
                         </div>
                     </div>
                 </section>
+
+                <!-- =================== Tab: AI =================== -->
+                <section class="dn-modal-pane" data-dn-pane="ai">
+                    <div class="dn-modal-section">
+                        <h3 class="dn-modal-section-title">AI assistant (bring your own key)</h3>
+                        <p class="dn-modal-section-desc">Used for natural-language scraper setup and column cleanup. Your key is stored locally in this browser only — never sent anywhere except the provider you choose below.</p>
+
+                        <div class="dn-field">
+                            <label class="dn-modal-label">Provider</label>
+                            <div class="dn-radio-pills">
+                                <label class="dn-radio-pill">
+                                    <input type="radio" name="dnAiProvider" value="anthropic" id="dnAiProviderAnthropic" checked>
+                                    <span>Anthropic</span>
+                                </label>
+                                <label class="dn-radio-pill">
+                                    <input type="radio" name="dnAiProvider" value="openai" id="dnAiProviderOpenAI">
+                                    <span>OpenAI</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="dn-field">
+                            <label class="dn-modal-label">API key</label>
+                            <input type="password" id="dnAiApiKey" placeholder="sk-ant-... or sk-..." class="dn-input dn-input-mono" autocomplete="off">
+                            <p class="dn-modal-section-desc" style="margin-top:6px;">Anthropic keys start with <code>sk-ant-</code>. OpenAI keys start with <code>sk-</code>. Get one at <span id="dnAiKeyLink"></span>.</p>
+                        </div>
+
+                        <div class="dn-field">
+                            <label class="dn-modal-label">Model</label>
+                            <input type="text" id="dnAiModel" placeholder="claude-haiku-4-5" class="dn-input dn-input-mono">
+                            <p class="dn-modal-section-desc" style="margin-top:6px;">Default: <code>claude-haiku-4-5</code> (Anthropic) or <code>gpt-4o-mini</code> (OpenAI). Fast/cheap models are recommended for selector generation and cleanup.</p>
+                        </div>
+
+                        <div class="dn-field">
+                            <label class="dn-modal-label">Base URL <span style="opacity:.6; font-weight: 400;">(optional)</span></label>
+                            <input type="text" id="dnAiBaseUrl" placeholder="https://api.anthropic.com" class="dn-input dn-input-mono">
+                            <p class="dn-modal-section-desc" style="margin-top:6px;">Override the default endpoint host. Useful for proxies, self-hosted gateways, or OpenAI-compatible services (Groq, OpenRouter, Ollama, LiteLLM). Leave blank to use the provider's default. The canonical path (<code>/v1/messages</code> for Anthropic, <code>/v1/chat/completions</code> for OpenAI) is appended automatically.</p>
+                        </div>
+
+                        <div class="dn-test-webhook-row">
+                            <button id="dnAiTest" class="dn-btn dn-btn-secondary" type="button">
+                                <i class="fas fa-plug"></i> Test API key
+                            </button>
+                            <div id="dnAiTestFeedback" class="dn-test-webhook-feedback hidden"></div>
+                        </div>
+                    </div>
+                </section>
             </div>
 
             <!-- Footer -->
@@ -354,6 +404,33 @@
             <div class="dn-step-header">
                 <h2 class="dn-step-title">Setup your scrape</h2>
                 <p class="dn-step-desc">Pick how the next page is reached and how long to wait between requests.</p>
+            </div>
+
+            <!-- AI-assisted setup — only shown when an API key is configured.
+                 Lets the user describe what they want in plain language; the
+                 model reads the page's HTML and fills the selector fields below. -->
+            <div class="dn-card hidden" id="dnAiSetupCard">
+                <h3 class="dn-card-title"><i class="fas fa-wand-magic-sparkles"></i> AI-assisted setup</h3>
+                <p class="dn-step-desc" style="margin-bottom:12px;">Describe what you want to scrape. The AI will read the page and suggest selectors for you to review.</p>
+                <div class="dn-field">
+                    <textarea id="dnAiSetupPrompt" rows="2" class="dn-input" placeholder="e.g. product names, prices, and image URLs"></textarea>
+                </div>
+                <div class="dn-test-webhook-row">
+                    <button id="dnAiSetupGenerate" class="dn-btn dn-btn-primary" type="button">
+                        <i class="fas fa-wand-magic-sparkles"></i> Generate selectors
+                    </button>
+                    <div id="dnAiSetupFeedback" class="dn-test-webhook-feedback hidden"></div>
+                </div>
+                <div id="dnAiSetupResult" class="hidden" style="margin-top:14px;">
+                    <div class="dn-step-desc" style="margin-bottom:8px;">Suggestion (review before applying):</div>
+                    <pre id="dnAiSetupResultBody" class="dn-input dn-input-mono" style="white-space:pre-wrap; max-height:240px; overflow:auto;"></pre>
+                    <div class="dn-test-webhook-row" style="margin-top:10px;">
+                        <button id="dnAiSetupApply" class="dn-btn dn-btn-primary" type="button">
+                            <i class="fas fa-check"></i> Apply suggestion
+                        </button>
+                        <button id="dnAiSetupDismiss" class="dn-btn dn-btn-ghost" type="button">Dismiss</button>
+                    </div>
+                </div>
             </div>
 
             <div class="dn-card">
@@ -537,6 +614,9 @@
                 </button>
                 <div class="dn-toolbar-spacer"></div>
                 <div class="dn-toolbar-group">
+                    <button id='dnAiClean' class="dn-btn dn-btn-secondary hidden" title="AI suggests column renames and cleanup transforms">
+                        <i class="fas fa-wand-magic-sparkles"></i> Clean with AI
+                    </button>
                     <button id='csv' class="dn-btn dn-btn-secondary" title="Download CSV">
                         <i class="fas fa-file-csv"></i> CSV
                     </button>
@@ -549,6 +629,21 @@
                     <button id='resetColumns' class="dn-btn dn-btn-ghost" title="Reset column edits">
                         <i class="fas fa-rotate-left"></i> Reset cols
                     </button>
+                </div>
+            </div>
+
+            <!-- AI cleanup result panel — appears between toolbar and table when
+                 the AI returns a suggestion. User reviews the column mapping +
+                 transforms before applying. -->
+            <div id="dnAiCleanResult" class="dn-card hidden">
+                <h3 class="dn-card-title"><i class="fas fa-wand-magic-sparkles"></i> AI cleanup suggestion</h3>
+                <p class="dn-step-desc" style="margin-bottom:10px;">Review the suggested column renames and transforms below, then apply or dismiss.</p>
+                <pre id="dnAiCleanResultBody" class="dn-input dn-input-mono" style="white-space:pre-wrap; max-height:300px; overflow:auto;"></pre>
+                <div class="dn-test-webhook-row" style="margin-top:10px;">
+                    <button id="dnAiCleanApply" class="dn-btn dn-btn-primary" type="button">
+                        <i class="fas fa-check"></i> Apply
+                    </button>
+                    <button id="dnAiCleanDismiss" class="dn-btn dn-btn-ghost" type="button">Dismiss</button>
                 </div>
             </div>
 
@@ -589,6 +684,7 @@
     </main>
 
     <script src="js/dn-bus.js"></script>
+    <script src="js/dn-llm.js"></script>
     <script src="js/index-page.js"></script>
     <script src="js/papaparse.min.js"></script>
     <script src="js/jquery-3.1.1.min.js"></script>

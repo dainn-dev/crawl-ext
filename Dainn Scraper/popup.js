@@ -301,6 +301,60 @@ window.dnSuggestExportFilename = function (extension) {
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
     return slug + '-' + stamp + '.' + (extension || 'xlsx');
 };
+
+// === Public hooks for the AI "Clean with AI" flow ===
+// Returns the pivoted table the same way w() does internally — but also
+// exposes namePaths (column → list of underlying field-path keys) so the
+// caller can mutate s.data at the right keys when applying transforms.
+window.dnGetTableSnapshot = function () {
+    if (!s || !s.data || !s.data.length) return null;
+    const pivoted = h(s.data);              // populates s.namePaths
+    const displayed = g(pivoted.fields);    // applies any existing renames
+    return {
+        fields: pivoted.fields,             // original column names (pre-rename)
+        displayedFields: displayed,         // post-rename column names
+        data: pivoted.data,                 // sample of rows for preview only
+        namePaths: Object.assign({}, s.namePaths || {})
+    };
+};
+// Apply AI cleanup suggestions:
+//   suggestions: [{original, rename, type, transform}]
+// Renames flow through s.config.headers (popup.js' existing rename map).
+// Transforms mutate the raw values inside s.data at the field-paths each
+// column resolves to, so subsequent renders/exports see cleaned values.
+window.dnApplyAiCleanup = function (suggestions) {
+    if (!Array.isArray(suggestions) || !s || !s.data) return 0;
+    if (!s.config) s.config = { headers: {}, deletedFields: {}, crawlDelay: 1000, maxWait: 20000 };
+    if (!s.config.headers) s.config.headers = {};
+    // Force the column→namePaths map to be fresh.
+    h(s.data);
+    const paths = s.namePaths || {};
+    let touched = 0;
+    suggestions.forEach(function (sug) {
+        if (!sug || !sug.original) return;
+        // Rename
+        if (sug.rename && sug.rename !== sug.original) {
+            s.config.headers[sug.original] = sug.rename;
+        }
+        // Transform — only run if there's a real transform AND we can find
+        // which underlying fields back this column.
+        const fn = window.dnAiTransformFns && window.dnAiTransformFns[sug.transform];
+        const fieldPaths = paths[sug.original] || [];
+        if (!fn || !fieldPaths.length) return;
+        s.data.forEach(function (row) {
+            fieldPaths.forEach(function (key) {
+                if (key in row) {
+                    try { row[key] = fn(row[key]); touched++; }
+                    catch (e) {}
+                }
+            });
+        });
+    });
+    // Persist renames + re-render.
+    if (typeof S === 'function') try { S(); } catch (e) {}
+    if (typeof v === 'function') try { v(); } catch (e) {}
+    return touched;
+};
 function b() {
     a.fireEvent("Download", {
         hostName: s.hostName,

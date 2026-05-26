@@ -378,6 +378,337 @@
 		});
 	}
 
+	// ===================================================================
+	// AI (BYO key) — Settings tab fields + Step 1 NL setup + Step 3 cleanup
+	// ===================================================================
+
+	// Whitelisted client-side transforms. The model only chooses a name from
+	// dnLlm.ALLOWED_TRANSFORMS; we resolve the name to a function here so
+	// the LLM can't smuggle arbitrary code in. Each fn is a value → value
+	// map that runs once per cell.
+	window.dnAiTransformFns = {
+		none: function (v) { return v; },
+		trim: function (v) { return v == null ? v : String(v).trim(); },
+		lowercase: function (v) { return v == null ? v : String(v).toLowerCase(); },
+		uppercase: function (v) { return v == null ? v : String(v).toUpperCase(); },
+		extractNumber: function (v) {
+			if (v == null) return v;
+			const m = String(v).replace(/,/g, '').match(/-?\d+(?:\.\d+)?/);
+			return m ? Number(m[0]) : v;
+		},
+		parseDate: function (v) {
+			if (v == null || v === '') return v;
+			const t = Date.parse(String(v));
+			return isNaN(t) ? v : new Date(t).toISOString().slice(0, 10);
+		},
+		removeUnits: function (v) {
+			if (v == null) return v;
+			return String(v).replace(/\s*[a-zA-Z%°]+\s*$/, '').trim();
+		},
+		stripHtml: function (v) {
+			if (v == null) return v;
+			return String(v).replace(/<[^>]*>/g, '').trim();
+		}
+	};
+
+	function dnAiSetFeedback(el, kind, msg) {
+		if (!el) return;
+		el.classList.remove('hidden', 'is-success', 'is-error', 'is-loading');
+		el.classList.add('is-' + kind);
+		el.textContent = msg;
+	}
+
+	function dnAiCurrentSettingsFromUI() {
+		const provider = (document.querySelector('input[name="dnAiProvider"]:checked') || {}).value || 'anthropic';
+		const apiKeyInput = document.getElementById('dnAiApiKey');
+		const modelInput = document.getElementById('dnAiModel');
+		const baseUrlInput = document.getElementById('dnAiBaseUrl');
+		return {
+			provider: provider,
+			apiKey: (apiKeyInput && apiKeyInput.value.trim()) || '',
+			model: (modelInput && modelInput.value.trim()) || (window.dnLlm.DEFAULTS[provider] && window.dnLlm.DEFAULTS[provider].model) || '',
+			baseUrl: (baseUrlInput && baseUrlInput.value.trim()) || ''
+		};
+	}
+
+	function dnAiApplySettingsToUI(settings) {
+		if (!settings) return;
+		const radio = document.querySelector('input[name="dnAiProvider"][value="' + settings.provider + '"]');
+		if (radio) radio.checked = true;
+		const apiKeyInput = document.getElementById('dnAiApiKey');
+		if (apiKeyInput) apiKeyInput.value = settings.apiKey || '';
+		const modelInput = document.getElementById('dnAiModel');
+		if (modelInput && settings.model) modelInput.value = settings.model;
+		const baseUrlInput = document.getElementById('dnAiBaseUrl');
+		if (baseUrlInput) baseUrlInput.value = settings.baseUrl || '';
+		dnAiUpdateProviderHints();
+		dnAiRefreshAvailability();
+	}
+
+	// Updates inline hints (model placeholder, base URL placeholder,
+	// key-portal link) when the provider radio changes. Doesn't overwrite
+	// user-entered values.
+	function dnAiUpdateProviderHints() {
+		const provider = (document.querySelector('input[name="dnAiProvider"]:checked') || {}).value || 'anthropic';
+		const defaults = (window.dnLlm && window.dnLlm.DEFAULTS && window.dnLlm.DEFAULTS[provider]) || {};
+		const modelInput = document.getElementById('dnAiModel');
+		if (modelInput) modelInput.placeholder = defaults.model || '';
+		const baseUrlInput = document.getElementById('dnAiBaseUrl');
+		if (baseUrlInput) baseUrlInput.placeholder = defaults.baseUrl || '';
+		const link = document.getElementById('dnAiKeyLink');
+		if (link && defaults.keyUrl) {
+			link.innerHTML = '<a href="' + defaults.keyUrl + '" target="_blank" rel="noopener">' + defaults.keyUrl + '</a>';
+		}
+	}
+
+	// Whether AI features are usable right now (key present in saved settings).
+	function dnAiIsConfigured(settings) {
+		return !!(settings && settings.apiKey && settings.apiKey.length > 10);
+	}
+
+	// Toggle visibility of in-wizard AI affordances (Step 1 card + Step 3 button).
+	function dnAiRefreshAvailability(savedSettings) {
+		const show = function (cb) {
+			if (savedSettings !== undefined) { cb(savedSettings); return; }
+			window.dnLlm.getSettings().then(cb);
+		};
+		show(function (s) {
+			const ready = dnAiIsConfigured(s);
+			const card = document.getElementById('dnAiSetupCard');
+			const cleanBtn = document.getElementById('dnAiClean');
+			if (card) card.classList.toggle('hidden', !ready);
+			if (cleanBtn) cleanBtn.classList.toggle('hidden', !ready);
+		});
+	}
+
+	async function dnAiHandleTestKey() {
+		const feedback = document.getElementById('dnAiTestFeedback');
+		const btn = document.getElementById('dnAiTest');
+		const uiSettings = dnAiCurrentSettingsFromUI();
+		if (!uiSettings.apiKey) { dnAiSetFeedback(feedback, 'error', 'Enter an API key first'); return; }
+		btn.disabled = true;
+		const original = btn.innerHTML;
+		btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Testing…';
+		dnAiSetFeedback(feedback, 'loading', 'Sending ping to ' + uiSettings.provider + '…');
+		const resp = await window.dnLlm.ping(uiSettings);
+		btn.disabled = false;
+		btn.innerHTML = original;
+		if (resp && resp.ok) {
+			// Persist on successful test — saves the user a second click.
+			await window.dnLlm.saveSettings(uiSettings);
+			dnAiSetFeedback(feedback, 'success', 'Connected. Model replied: ' + (resp.text || '').trim().slice(0, 40));
+			dnAiRefreshAvailability(uiSettings);
+		} else {
+			dnAiSetFeedback(feedback, 'error', (resp && resp.error) || 'Ping failed');
+		}
+	}
+
+	// Persist AI settings whenever provider/key/model fields change so user
+	// doesn't have to hit "Save settings" in the modal footer (which lives
+	// in a separate save chain for non-AI fields).
+	function dnAiAutoSaveBindings() {
+		const inputs = [
+			document.getElementById('dnAiApiKey'),
+			document.getElementById('dnAiModel'),
+			document.getElementById('dnAiBaseUrl')
+		].concat(Array.from(document.querySelectorAll('input[name="dnAiProvider"]')));
+		inputs.forEach(function (el) {
+			if (!el) return;
+			el.addEventListener('change', function () {
+				window.dnLlm.saveSettings(dnAiCurrentSettingsFromUI()).then(function () {
+					dnAiUpdateProviderHints();
+					dnAiRefreshAvailability();
+				});
+			});
+		});
+	}
+
+	// --- Step 1: AI-assisted scraper setup -----------------------------
+	let dnAiSetupSuggestion = null;
+
+	async function dnAiHandleGenerateSelectors() {
+		const promptEl = document.getElementById('dnAiSetupPrompt');
+		const feedback = document.getElementById('dnAiSetupFeedback');
+		const btn = document.getElementById('dnAiSetupGenerate');
+		const result = document.getElementById('dnAiSetupResult');
+		const resultBody = document.getElementById('dnAiSetupResultBody');
+		const description = (promptEl && promptEl.value.trim()) || '';
+		if (!description) {
+			dnAiSetFeedback(feedback, 'error', 'Describe what you want to scrape first.');
+			if (promptEl) promptEl.focus();
+			return;
+		}
+		const settings = await window.dnLlm.getSettings();
+		if (!dnAiIsConfigured(settings)) {
+			dnAiSetFeedback(feedback, 'error', 'No API key — open Settings → AI');
+			return;
+		}
+		btn.disabled = true;
+		const original = btn.innerHTML;
+		btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Reading page…';
+		dnAiSetFeedback(feedback, 'loading', 'Fetching page HTML…');
+
+		// Get the page HTML through the content script. popup.js parses tabid
+		// from the URL on load; we re-parse it here rather than reach across
+		// the module boundary (popup.js loads as a module, so its locals
+		// aren't on window).
+		const tabId = parseInt(new URLSearchParams(window.location.search).get('tabid'), 10);
+		const html = await new Promise(function (resolve) {
+			if (!tabId || !chrome.tabs || !chrome.tabs.sendMessage) { resolve(null); return; }
+			chrome.tabs.sendMessage(tabId, { action: 'getPageHTML' }, function (resp) {
+				if (chrome.runtime.lastError || !resp || !resp.html) {
+					console.warn('[ai] getPageHTML failed:', chrome.runtime.lastError && chrome.runtime.lastError.message);
+					resolve(null);
+					return;
+				}
+				resolve(resp.html);
+			});
+		});
+		if (!html) {
+			btn.disabled = false; btn.innerHTML = original;
+			dnAiSetFeedback(feedback, 'error', 'Could not read page HTML — try reloading the target tab.');
+			return;
+		}
+
+		btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Asking AI…';
+		dnAiSetFeedback(feedback, 'loading', 'Calling ' + settings.provider + '…');
+		const out = await window.dnLlm.generateScraperConfig({ settings: settings, html: html, description: description });
+		btn.disabled = false; btn.innerHTML = original;
+
+		if (!out.ok) {
+			dnAiSetFeedback(feedback, 'error', out.error || 'AI call failed');
+			return;
+		}
+		const data = out.data || {};
+		if (data.error) {
+			dnAiSetFeedback(feedback, 'error', 'AI: ' + data.error);
+			return;
+		}
+		dnAiSetupSuggestion = data;
+		dnAiSetFeedback(feedback, 'success', 'Got a suggestion — review below.');
+		if (resultBody) resultBody.textContent = JSON.stringify(data, null, 2);
+		if (result) result.classList.remove('hidden');
+	}
+
+	function dnAiHandleApplySetup() {
+		if (!dnAiSetupSuggestion) return;
+		const sug = dnAiSetupSuggestion;
+		// Apply content selector
+		if (sug.contentSelector) {
+			const inp = document.getElementById('contentSelectorInput');
+			if (inp) inp.value = sug.contentSelector;
+			const applyBtn = document.getElementById('applyContentSelector');
+			if (applyBtn) applyBtn.click();
+		}
+		// Apply next-page selector if returned
+		if (sug.nextSelector) {
+			const inp = document.getElementById('nextSelectorInput');
+			if (inp) {
+				inp.value = sug.nextSelector;
+				inp.dispatchEvent(new Event('input'));
+			}
+			const cssPag = document.getElementById('paginationCSS');
+			if (cssPag) { cssPag.checked = true; cssPag.dispatchEvent(new Event('change')); }
+		}
+		showScrapingNotification('AI suggestion applied. Preview to verify.', 'success');
+		const result = document.getElementById('dnAiSetupResult');
+		if (result) result.classList.add('hidden');
+		dnAiSetupSuggestion = null;
+	}
+
+	function dnAiHandleDismissSetup() {
+		dnAiSetupSuggestion = null;
+		const result = document.getElementById('dnAiSetupResult');
+		if (result) result.classList.add('hidden');
+	}
+
+	// --- Step 3: AI cleanup --------------------------------------------
+	let dnAiCleanSuggestion = null;
+
+	async function dnAiHandleClean() {
+		const btn = document.getElementById('dnAiClean');
+		const result = document.getElementById('dnAiCleanResult');
+		const resultBody = document.getElementById('dnAiCleanResultBody');
+		if (typeof window.dnGetTableSnapshot !== 'function') {
+			showScrapingNotification('Crawl something first.', 'warning');
+			return;
+		}
+		const snap = window.dnGetTableSnapshot();
+		if (!snap || !snap.data || !snap.data.length) {
+			showScrapingNotification('No scraped data to clean.', 'warning');
+			return;
+		}
+		const settings = await window.dnLlm.getSettings();
+		if (!dnAiIsConfigured(settings)) {
+			showScrapingNotification('No API key — open Settings → AI', 'error');
+			return;
+		}
+		btn.disabled = true;
+		const original = btn.innerHTML;
+		btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analysing…';
+		const out = await window.dnLlm.suggestColumnCleanup({
+			settings: settings,
+			headers: snap.fields,                  // original (pre-rename) column names — these match s.namePaths keys
+			sampleRows: snap.data.slice(0, 8)
+		});
+		btn.disabled = false; btn.innerHTML = original;
+		if (!out.ok) {
+			showScrapingNotification('AI cleanup failed: ' + (out.error || 'unknown'), 'error');
+			return;
+		}
+		dnAiCleanSuggestion = out.data;
+		if (resultBody) resultBody.textContent = JSON.stringify(out.data, null, 2);
+		if (result) result.classList.remove('hidden');
+	}
+
+	function dnAiHandleApplyClean() {
+		if (!Array.isArray(dnAiCleanSuggestion) || !dnAiCleanSuggestion.length) return;
+		if (typeof window.dnApplyAiCleanup !== 'function') {
+			showScrapingNotification('Cleanup hook missing in popup.js', 'error');
+			return;
+		}
+		const touched = window.dnApplyAiCleanup(dnAiCleanSuggestion);
+		showScrapingNotification('Applied cleanup (' + touched + ' cells transformed).', 'success');
+		const result = document.getElementById('dnAiCleanResult');
+		if (result) result.classList.add('hidden');
+		dnAiCleanSuggestion = null;
+	}
+
+	function dnAiHandleDismissClean() {
+		dnAiCleanSuggestion = null;
+		const result = document.getElementById('dnAiCleanResult');
+		if (result) result.classList.add('hidden');
+	}
+
+	function dnInitAi() {
+		if (!window.dnLlm) {
+			console.warn('[ai] dn-llm.js not loaded — AI features disabled');
+			return;
+		}
+		// Settings tab wiring
+		const testBtn = document.getElementById('dnAiTest');
+		if (testBtn) testBtn.addEventListener('click', dnAiHandleTestKey);
+		dnAiAutoSaveBindings();
+		dnAiUpdateProviderHints();
+		window.dnLlm.getSettings().then(dnAiApplySettingsToUI);
+
+		// Step 1 — Generate / Apply / Dismiss
+		const genBtn = document.getElementById('dnAiSetupGenerate');
+		const applyBtn = document.getElementById('dnAiSetupApply');
+		const dismissBtn = document.getElementById('dnAiSetupDismiss');
+		if (genBtn) genBtn.addEventListener('click', dnAiHandleGenerateSelectors);
+		if (applyBtn) applyBtn.addEventListener('click', dnAiHandleApplySetup);
+		if (dismissBtn) dismissBtn.addEventListener('click', dnAiHandleDismissSetup);
+
+		// Step 3 — Clean / Apply / Dismiss
+		const cleanBtn = document.getElementById('dnAiClean');
+		const cleanApplyBtn = document.getElementById('dnAiCleanApply');
+		const cleanDismissBtn = document.getElementById('dnAiCleanDismiss');
+		if (cleanBtn) cleanBtn.addEventListener('click', dnAiHandleClean);
+		if (cleanApplyBtn) cleanApplyBtn.addEventListener('click', dnAiHandleApplyClean);
+		if (cleanDismissBtn) cleanDismissBtn.addEventListener('click', dnAiHandleDismissClean);
+	}
+
 	function toggleAuthMethodSection() {
 		if (autoUploadDrive.checked) {
 			authMethodSection.classList.remove('hidden');
@@ -2795,6 +3126,7 @@
 		dnInitCrawlHistoryBus();
 		dnInitDriveAuth();
 		dnInitDriveAutoUpload();
+		dnInitAi();
 
 		// One-time move from chrome.storage.sync → .local for crawl history,
 		// then load. Wrapped so the migration callback fires before render.

@@ -37,6 +37,14 @@
  *    { action: 'dn:driveUpload', filename, mimeType, bytesBase64 }
  *      → { ok: true, fileId, webViewLink, durationMs }
  *      → { ok: false, error, durationMs }
+ *
+ *    { action: 'dn:aiCall', provider, apiKey, model, system, user, maxTokens?, jsonMode? }
+ *      → { ok: true, text, usage, durationMs }
+ *      → { ok: false, error, durationMs }
+ *      Currently supports provider='anthropic' (Messages API) and 'openai'
+ *      (Chat Completions). All HTTPS so it could also run in-page, but
+ *      routing through the SW keeps the API key out of any page context
+ *      that opens DevTools and lets us add cost tracking in one place later.
  */
 
 chrome.action.onClicked.addListener(function (activeTab) {
@@ -287,6 +295,95 @@ async function uploadToDrive(req) {
     }
 }
 
+async function callAnthropic(req) {
+    // Anthropic Messages API. We don't use the Anthropic JS SDK because
+    // service workers don't ship XHR and the SDK pulls in extras; native
+    // fetch is fine.
+    // baseUrl override lets users point at proxies / self-hosted gateways.
+    // We append the canonical path so the user only configures the host.
+    const base = (req.baseUrl && String(req.baseUrl).replace(/\/+$/, '')) || 'https://api.anthropic.com';
+    const url = base + '/v1/messages';
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': req.apiKey,
+            'anthropic-version': '2023-06-01',
+            // Required so fetch from an extension page is allowed —
+            // browsers otherwise enforce same-origin checks even for the
+            // SW. See https://docs.anthropic.com/en/api/client-sdks#browser-usage
+            'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+            model: req.model || 'claude-haiku-4-5',
+            max_tokens: req.maxTokens || 1024,
+            system: req.system || undefined,
+            messages: [{ role: 'user', content: req.user || '' }]
+        })
+    });
+    const json = await resp.json().catch(function () { return {}; });
+    if (!resp.ok) {
+        return { ok: false, error: 'Anthropic HTTP ' + resp.status + ': ' + ((json && json.error && json.error.message) || resp.statusText) };
+    }
+    // content is an array of blocks; we only request text so take block[0].
+    const text = (json.content && json.content[0] && json.content[0].text) || '';
+    return { ok: true, text: text, usage: json.usage || null };
+}
+
+async function callOpenAI(req) {
+    const messages = [];
+    if (req.system) messages.push({ role: 'system', content: req.system });
+    messages.push({ role: 'user', content: req.user || '' });
+
+    const body = {
+        model: req.model || 'gpt-4o-mini',
+        messages: messages,
+        max_tokens: req.maxTokens || 1024
+    };
+    // jsonMode: ask for response_format=json_object so the model is forced
+    // to return parseable JSON. Caller is still expected to defensively
+    // strip code fences (some older models ignore the param).
+    if (req.jsonMode) body.response_format = { type: 'json_object' };
+
+    const base = (req.baseUrl && String(req.baseUrl).replace(/\/+$/, '')) || 'https://api.openai.com';
+    const url = base + '/v1/chat/completions';
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + req.apiKey
+        },
+        body: JSON.stringify(body)
+    });
+    const json = await resp.json().catch(function () { return {}; });
+    if (!resp.ok) {
+        return { ok: false, error: 'OpenAI HTTP ' + resp.status + ': ' + ((json && json.error && json.error.message) || resp.statusText) };
+    }
+    const text = (json.choices && json.choices[0] && json.choices[0].message && json.choices[0].message.content) || '';
+    return { ok: true, text: text, usage: json.usage || null };
+}
+
+async function callAi(req) {
+    const started = performance.now();
+    if (!req || !req.apiKey) {
+        return { ok: false, error: 'Missing API key', durationMs: 0 };
+    }
+    let result;
+    try {
+        if (req.provider === 'openai') {
+            result = await callOpenAI(req);
+        } else {
+            // Default to Anthropic — keeps behaviour predictable if the
+            // popup forgets to send `provider`.
+            result = await callAnthropic(req);
+        }
+    } catch (err) {
+        result = { ok: false, error: (err && err.message) || String(err) };
+    }
+    result.durationMs = Math.round(performance.now() - started);
+    return result;
+}
+
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     if (!msg || typeof msg !== 'object') return false;
 
@@ -304,6 +401,10 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     }
     if (msg.action === 'dn:driveUpload') {
         uploadToDrive(msg).then(sendResponse);
+        return true;
+    }
+    if (msg.action === 'dn:aiCall') {
+        callAi(msg).then(sendResponse);
         return true;
     }
 

@@ -223,7 +223,38 @@ function positionBadgeFor(el) {
   pickerBadge.style.left = left + "px";
 }
 
-function j(a) {
+// Walk up from a clicked element looking for the nearest ancestor that holds
+// repeating children — i.e. a list/grid container. Uses d() to score how
+// "list-like" an element's children are. This is the key behavioural
+// difference between the Next-button picker (wants a single leaf click target)
+// and the Content picker (wants the container of the data rows). Without
+// this, clicking on a product *card* would just capture that one card; the
+// scraper expects the container *of* the cards.
+function snapToContentContainer(el) {
+  if (!el || el === document.body || el === document.documentElement) return el;
+  var node = el;
+  var best = el;
+  var bestScore = -1;
+  // Bounded climb — most listing pages put data within ~10 levels of any cell.
+  for (var depth = 0; depth < 10; depth++) {
+      if (!node || node === document.body || node === document.documentElement) break;
+      try {
+          var rows = d(node);
+          var rowCount = rows ? rows.length : 0;
+          if (rowCount >= 3 && rowCount > bestScore) {
+              best = node;
+              bestScore = rowCount;
+          }
+      } catch (_) {}
+      node = node.parentNode;
+  }
+  return best;
+}
+
+// mode: 'next' (default — capture a click target like a "Next page" button)
+//       'content' (capture the container element holding repeating rows)
+function j(a, mode) {
+  mode = mode === 'content' ? 'content' : 'next';
   // If a previous picker is still active, tear it down and resolve it as cancelled
   if (pickerActive && pickerCallback) {
       try { pickerCallback({ cancelled: true }); } catch (e) {}
@@ -237,10 +268,12 @@ function j(a) {
 
   // Build banner
   pickerBanner = document.createElement("div");
-  pickerBanner.className = "tablescraper-picker-banner";
+  pickerBanner.className = "tablescraper-picker-banner" + (mode === 'content' ? " is-content" : "");
   var msg = document.createElement("span");
   msg.className = "tps-msg";
-  msg.innerHTML = "Click an element to capture &nbsp;|&nbsp; press <b>ESC</b> to cancel";
+  msg.innerHTML = mode === 'content'
+      ? "Click the <b>content area</b> to scrape — we'll snap to the list/grid container &nbsp;|&nbsp; press <b>ESC</b> to cancel"
+      : "Click an element to capture as <b>Next page</b> &nbsp;|&nbsp; press <b>ESC</b> to cancel";
   var preview = document.createElement("span");
   preview.className = "tps-preview";
   pickerPreviewEl = preview;
@@ -255,7 +288,7 @@ function j(a) {
 
   // Build floating badge
   pickerBadge = document.createElement("div");
-  pickerBadge.className = "tablescraper-picker-badge";
+  pickerBadge.className = "tablescraper-picker-badge" + (mode === 'content' ? " is-content" : "");
   pickerBadge.style.display = "none";
   document.body.appendChild(pickerBadge);
 
@@ -287,17 +320,20 @@ function j(a) {
       if (lastHovered) positionBadgeFor(lastHovered);
   });
 
-  // Hover preview
+  // Hover preview — in content mode, preview the container we'd snap to so
+  // users see the actual capture target while moving the mouse, not the leaf.
   q = function(ev) {
       if (isPickerUI(ev.target)) return;
       $(".tablescraper-hover").removeClass("tablescraper-hover");
-      ev.target.classList.add("tablescraper-hover");
-      lastHovered = ev.target;
-      var sel = i(ev.target);
+      var target = ev.target;
+      var snapped = mode === 'content' ? snapToContentContainer(target) : target;
+      (snapped || target).classList.add("tablescraper-hover");
+      lastHovered = snapped || target;
+      var sel = i(snapped || target);
       if (pickerPreviewEl) pickerPreviewEl.textContent = sel;
       if (pickerBadge) {
-          pickerBadge.textContent = sel;
-          positionBadgeFor(ev.target);
+          pickerBadge.textContent = (mode === 'content' ? 'container: ' : '') + sel;
+          positionBadgeFor(snapped || target);
       }
   };
 
@@ -306,11 +342,13 @@ function j(a) {
       if (isPickerUI(ev.target)) return;
       ev.preventDefault();
       ev.stopPropagation();
-      var sel = i(ev.target);
-      console.log("Next button selector:", sel);
-      // Briefly mark the picked element
-      ev.target.classList.add("tablescraper-next-button");
-      finish({ selector: sel });
+      var picked = mode === 'content' ? (snapToContentContainer(ev.target) || ev.target) : ev.target;
+      var sel = i(picked);
+      console.log(mode === 'content' ? "Content area selector:" : "Next button selector:", sel);
+      // Briefly mark the picked element (different class per mode so the
+      // page CSS can give visual feedback that matches what was captured).
+      picked.classList.add(mode === 'content' ? "tablescraper-selected-table" : "tablescraper-next-button");
+      finish({ selector: sel, mode: mode });
       return false;
   };
 
@@ -380,7 +418,11 @@ chrome.runtime.onMessage.addListener(function(a, b, c) {
       return true;
   }
   if ("getNextButton" == a.action) {
-      j(c);
+      j(c, 'next');
+      return true;
+  }
+  if ("getContentArea" == a.action) {
+      j(c, 'content');
       return true;
   }
   if ("cancelPicker" == a.action) {

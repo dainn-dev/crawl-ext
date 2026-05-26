@@ -838,6 +838,14 @@ body.dn-body {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+/* Input variant of .dn-selector-code — used while the user is typing a new
+   selector (Add button). Inherits sizing from .dn-selector-code so the row
+   doesn't jump when the input is replaced by a span on blur. */
+input.dn-selector-code-input {
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.15);
+    border-color: #3b82f6;
+}
 
 .dn-icon-btn {
     background: transparent;

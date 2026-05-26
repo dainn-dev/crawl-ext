@@ -1,6 +1,8 @@
 /*! InstantDataScraperNext - 2025-01-29 */
 
-// Helper function to format working time in hh:mm:ss format
+// Helper function to format working time in hh:mm:ss format.
+// Exposed on window so index-page.js (loaded earlier in a separate IIFE) can
+// share the same implementation instead of redefining it.
 function formatWorkingTime(seconds) {
     const totalSeconds = seconds || 0;
     const hours = Math.floor(totalSeconds / 3600);
@@ -8,6 +10,7 @@ function formatWorkingTime(seconds) {
     const secs = totalSeconds % 60;
     return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 }
+window.dnFormatWorkingTime = formatWorkingTime;
 
 function e(e, t, n, o, r, a, i) {
     var s = {}
@@ -157,6 +160,13 @@ function p(e, t, n, o) {
     if ("" === e)
         return $("#" + t).hide();
     $("#" + t).show().text(e),
+    // Emit scrape:error BEFORE L() so listeners see error→completed in order.
+    // n=true means "this is fatal, stop the run"; o=true means "report to
+    // analytics" — both signal an error worth broadcasting.
+    (n || o) && window.dnBus && window.dnBus.emit('scrape:error', {
+        message: e,
+        errorId: t
+    }),
     n && L(e),
     o && a.fireEvent("Error", {
         url: s.startingUrl || i.url,
@@ -262,6 +272,35 @@ function m(e) {
         n[o] = 255 & e.charCodeAt(o);
     return t
 }
+
+// === Public XLSX helpers used by index-page.js' Drive upload flow ===
+// The download buttons build the workbook via w() → o() → m() inline;
+// extracting it here lets the upload pipeline reuse the exact same encoding.
+window.dnBuildXlsxArrayBuffer = function () {
+    if (!s || !s.data || !s.data.length) return null;
+    const sheetName = (i.url || 'sheet').substring(0, 100);
+    const xlsxBinary = o(w(s.data), sheetName);
+    return m(xlsxBinary);
+};
+window.dnBuildXlsxBase64 = function () {
+    const buf = window.dnBuildXlsxArrayBuffer();
+    if (!buf) return null;
+    const bytes = new Uint8Array(buf);
+    // btoa requires a string of single-byte chars; build it in 32 KB chunks
+    // so we don't hit the call-stack limit on String.fromCharCode for big files.
+    let bin = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        bin += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(bin);
+};
+window.dnSuggestExportFilename = function (extension) {
+    const raw = (s && (s.startingUrl || s.url)) || (i && i.url) || 'export';
+    const slug = raw.replace(/^https?:\/\//, '').replace(/[<>:"/\\|?*]/g, '_').replace(/\./g, '_').slice(0, 80);
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    return slug + '-' + stamp + '.' + (extension || 'xlsx');
+};
 function b() {
     a.fireEvent("Download", {
         hostName: s.hostName,
@@ -1411,6 +1450,10 @@ function T() {
     window.autoDownloadTriggered = false,
     // Mark that scraping has started (prevents auto-download on initial load)
     window.scrapingHasStarted = true,
+    window.dnBus && window.dnBus.emit('scrape:started', {
+        hostName: s.hostName,
+        startingUrl: s.startingUrl
+    }),
     $("#startScraping").hide(),
     $("#stopScraping").show(),
     
@@ -1493,6 +1536,11 @@ function T() {
                     D(e.data),
                     q(),
                     v(), // Always update table - no row limit
+                    window.dnBus && window.dnBus.emit('scrape:page', {
+                        pageNumber: s.pages,
+                        rowsThisPage: e.data.length,
+                        totalRows: s.data.length
+                    }),
                     
                     // Check if next page exists before continuing
                     (s.scraping && (function() {
@@ -1554,8 +1602,22 @@ function I() {
     })
 }
 function L(e=null) {
+    // Guard against double-fire — L() runs on manual stop, no-more-pages, and
+    // error paths; we only want one scrape:completed per run.
+    const wasScraping = !!s.scraping;
+    // L() is also bound as a jQuery click handler ($("#stopScraping").click(L)),
+    // which means `e` can be a jQuery event object, not an error message.
+    // Only treat as error when `e` is a non-empty string (the shape p() uses
+    // when calling L with the user-facing error message).
+    const isError = typeof e === 'string' && e.length > 0;
     s.scraping = !1,
     console.log("Scraping stopped."),
+    wasScraping && window.dnBus && window.dnBus.emit('scrape:completed', {
+        reason: isError ? 'error' : 'normal',
+        totalRows: (s.data && s.data.length) || 0,
+        pages: s.pages || 0,
+        workingTimeMs: s.workingTime || 0
+    }),
     $("#startScraping").show(),
     $("#stopScraping").hide(),
 
@@ -1783,6 +1845,52 @@ $("#applyNextSelector").click(function() {
     e && e.error ? p(e.error, e.errorId || "error", !0) : $("#startScraping").show();
   })
 })
+function applyContentSelectorToTable(selector) {
+  if (!selector) return;
+  s.tableSelector = selector;
+  localStorage.setItem("contentSelector:" + s.hostName, selector);
+  $("#hot").empty();
+  chrome.tabs.sendMessage(i.id, {
+    action: "getTableData",
+    selector: selector
+  }, function(e) {
+    if (e && e.error) {
+      p(e.error, e.errorId || "error", !0);
+      return;
+    }
+    if (!e) return;
+    p("Content selector applied. Preview the data or start crawling.", "instructions");
+    s.data = e.data || [];
+    s.tableSelector = e.tableSelector || selector;
+    s.goodClasses = e.goodClasses;
+    s.lastRows = s.data.length;
+    s.pages = 1;
+    if (typeof q === "function") try { q() } catch (err) {}
+    if (typeof v === "function") try { v() } catch (err) {}
+    if (typeof window.updatePageTitle === "function") window.updatePageTitle();
+  });
+}
+$("#applyContentSelector").click(function() {
+  const t = $("#contentSelectorInput").val().trim();
+  if (!t) {
+    p('Click the content area you want to scrape — we will snap to the list container', "instructions");
+    // Use the content-area picker (banner is teal, snaps to the nearest
+    // ancestor with repeating children) rather than the Next-button picker.
+    chrome.tabs.sendMessage(i.id, { action: "getContentArea" }, function(res) {
+      if (res && res.cancelled) {
+        p("", "instructions");
+        return;
+      }
+      if (res && res.selector) {
+        $("#contentSelectorInput").val(res.selector);
+        applyContentSelectorToTable(res.selector);
+      }
+    });
+    return;
+  }
+  p("", "inputError");
+  applyContentSelectorToTable(t);
+})
 // Handle start scraping for both modern and legacy UI
 $("#startScraping").click(function(e) {
     e.preventDefault();
@@ -1801,18 +1909,16 @@ $("#startScraping").click(function(e) {
     }
     
     console.log('Start button clicked - Stop button now visible');
-    
-    // Add crawl history item if function is available
-    if (typeof addCrawlHistoryItem === 'function' && i && i.url) {
-        currentCrawlId = addCrawlHistoryItem(i.url, i.title || 'Unknown Page');
-        console.log('🚀 Started crawl session from popup.js:', currentCrawlId);
-    }
-    
+
+    // History bookkeeping moved to a single dnBus('scrape:started') subscriber
+    // in index-page.js — calling addCrawlHistoryItem here AND in
+    // handleStartScraping previously created two entries per click.
+
     // Update page title with startingUrl when scraping starts
     if (typeof window.updatePageTitle === 'function') {
         window.updatePageTitle();
     }
-    
+
     T(); // Call the original function
 });
 
@@ -1834,14 +1940,8 @@ $("#stopScraping").click(function(e) {
     }
     
     console.log('Stop button clicked - Start button now visible');
-    
-    // Update crawl history item if function is available
-    if (typeof updateCrawlHistoryItem === 'function' && currentCrawlId) {
-        const itemCount = s && s.data ? s.data.length : 0;
-        updateCrawlHistoryItem(currentCrawlId, itemCount, 'completed');
-        console.log('🏁 Completed crawl session from popup.js:', currentCrawlId, 'with', itemCount, 'items');
-        currentCrawlId = null;
-    }
+
+    // History close-out moved to dnBus('scrape:completed') subscriber.
     
     L(); // Call the original stop function
 });

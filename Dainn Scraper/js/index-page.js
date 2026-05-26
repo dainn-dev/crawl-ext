@@ -1,6 +1,11 @@
 (function () {
-	// Helper function to format working time in hh:mm:ss format
+	// Format seconds → hh:mm:ss. Defers to the popup.js implementation when
+	// loaded; this local fallback exists because index-page.js can briefly run
+	// before popup.js defines window.dnFormatWorkingTime.
 	function formatWorkingTime(seconds) {
+		if (typeof window.dnFormatWorkingTime === 'function') {
+			return window.dnFormatWorkingTime(seconds);
+		}
 		const totalSeconds = seconds || 0;
 		const hours = Math.floor(totalSeconds / 3600);
 		const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -140,12 +145,13 @@
 	const addSelector = document.getElementById('addSelector');
 
 	// Authentication method elements
-	const oauthRadio = document.getElementById('oauthRadio');
-	const serviceRadio = document.getElementById('serviceRadio');
-	const oauthFields = document.getElementById('oauthFields');
-	const serviceFields = document.getElementById('serviceFields');
-	const privateKeyFile = document.getElementById('privateKeyFile');
-	const fileName = document.getElementById('fileName');
+	// Drive OAuth UI — uses chrome.identity, not user-entered Client ID/secret.
+	// Service-account flow was removed: storing a service-account private key
+	// in a client-side extension is unsafe (anyone inspecting storage can
+	// exfiltrate it). The "Connect to Drive" button below drives the flow.
+	const dnDriveConnectBtn = document.getElementById('dnDriveConnect');
+	const dnDriveDisconnectBtn = document.getElementById('dnDriveDisconnect');
+	const dnDriveStatusEl = document.getElementById('dnDriveStatus');
 
 	const autoUploadDrive = document.getElementById('autoUploadDrive');
 	const enableWebhooks = document.getElementById('enableWebhooks');
@@ -188,52 +194,188 @@
 		document.body.style.overflow = 'auto';
 	}
 
+	// Build a .dn-selector-row matching the markup styled by popup.css.
+	// When `value` is empty (Add button), the row starts in edit mode (input
+	// focused); commit on blur/Enter into a <span>. When `value` is supplied
+	// (loading saved settings), render directly as a committed span.
+	function buildSelectorRow(value) {
+		const row = document.createElement('div');
+		row.className = 'dn-selector-row';
+
+		const editing = !value;
+		if (editing) {
+			const input = document.createElement('input');
+			input.type = 'text';
+			input.placeholder = "e.g. a[title='Next Page']";
+			input.className = 'dn-selector-code dn-selector-code-input';
+			row.appendChild(input);
+		} else {
+			const span = document.createElement('span');
+			span.className = 'dn-selector-code';
+			span.textContent = value;
+			row.appendChild(span);
+		}
+
+		const removeBtn = document.createElement('button');
+		removeBtn.type = 'button';
+		removeBtn.className = 'dn-icon-btn dn-icon-btn-danger dn-selector-remove';
+		removeBtn.title = 'Remove';
+		removeBtn.innerHTML = '<i class="fas fa-trash"></i>';
+		row.appendChild(removeBtn);
+
+		return row;
+	}
+
 	function addNewSelector() {
 		const selectorsList = document.getElementById('selectorsList');
-		const newSelector = document.createElement('div');
-		newSelector.className = 'flex items-center justify-between p-3 bg-gray-50 rounded-lg';
-		newSelector.innerHTML = [
-			'<input type="text" placeholder="Enter CSS selector" class="flex-1 bg-transparent text-blue-600 font-mono text-sm focus:outline-none">',
-			'<button class="text-gray-400 hover:text-red-500 ml-2 selector-remove">',
-			'<i class="fas fa-trash"></i>',
-			'</button>'
-		].join('');
-		selectorsList.appendChild(newSelector);
+		if (!selectorsList) return;
+		const row = buildSelectorRow('');
+		selectorsList.appendChild(row);
 
-		const input = newSelector.querySelector('input');
-		const removeBtn = newSelector.querySelector('.selector-remove');
+		const input = row.querySelector('input');
 		input.focus();
 
-		removeBtn.addEventListener('click', function () {
-			newSelector.remove();
-			updateSelectorSuggestions();
-		});
-
-		input.addEventListener('blur', function () {
-			if (this.value.trim()) {
-				const span = document.createElement('span');
-				span.className = 'text-blue-600 font-mono text-sm';
-				span.textContent = this.value.trim();
-				newSelector.replaceChild(span, this);
+		function commit() {
+			const v = input.value.trim();
+			if (!v) {
+				row.remove();
 				updateSelectorSuggestions();
+				return;
 			}
-		});
+			const span = document.createElement('span');
+			span.className = 'dn-selector-code';
+			span.textContent = v;
+			row.replaceChild(span, input);
+			updateSelectorSuggestions();
+		}
 
-		input.addEventListener('keypress', function (e) {
-			if (e.key === 'Enter') {
-				this.blur();
-			}
+		input.addEventListener('blur', commit);
+		input.addEventListener('keydown', function (e) {
+			if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+			else if (e.key === 'Escape') { row.remove(); updateSelectorSuggestions(); }
 		});
 	}
 
-	function switchAuthMethod() {
-		if (oauthRadio.checked) {
-			oauthFields.classList.remove('hidden');
-			serviceFields.classList.add('hidden');
-		} else if (serviceRadio.checked) {
-			oauthFields.classList.add('hidden');
-			serviceFields.classList.remove('hidden');
+	function readSelectorRows() {
+		const rows = document.querySelectorAll('#selectorsList .dn-selector-row');
+		const out = [];
+		rows.forEach(row => {
+			const span = row.querySelector('span.dn-selector-code');
+			const input = row.querySelector('input.dn-selector-code');
+			const value = (span && span.textContent.trim())
+				|| (input && input.value.trim())
+				|| '';
+			if (value) out.push(value);
+		});
+		// De-dupe while preserving order.
+		return Array.from(new Set(out));
+	}
+
+	// Stub kept so call-sites that still reference switchAuthMethod don't
+	// throw — the auth-method radios were removed when service-account flow
+	// was retired. Safe to delete once those call-sites are cleaned up.
+	function switchAuthMethod() { /* no-op since service-account was removed */ }
+
+	function dnSetDriveStatus(kind, message) {
+		if (!dnDriveStatusEl) return;
+		dnDriveStatusEl.classList.remove('hidden', 'is-success', 'is-error', 'is-loading');
+		dnDriveStatusEl.classList.add('is-' + kind);
+		dnDriveStatusEl.textContent = message;
+	}
+
+	function dnRefreshDriveConnected(showWhenIdle) {
+		if (!dnDriveConnectBtn) return;
+		chrome.runtime.sendMessage({ action: 'dn:driveAuth', interactive: false }, function (resp) {
+			if (chrome.runtime.lastError || !resp || !resp.ok) {
+				dnDriveConnectBtn.classList.remove('hidden');
+				if (dnDriveDisconnectBtn) dnDriveDisconnectBtn.classList.add('hidden');
+				if (showWhenIdle && dnDriveStatusEl) dnDriveStatusEl.classList.add('hidden');
+				return;
+			}
+			dnDriveConnectBtn.classList.add('hidden');
+			if (dnDriveDisconnectBtn) dnDriveDisconnectBtn.classList.remove('hidden');
+			dnSetDriveStatus('success', 'Connected to Drive');
+		});
+	}
+
+	function dnInitDriveAuth() {
+		if (!dnDriveConnectBtn) return;
+		dnDriveConnectBtn.addEventListener('click', function () {
+			dnSetDriveStatus('loading', 'Opening Google sign-in…');
+			chrome.runtime.sendMessage({ action: 'dn:driveAuth', interactive: true }, function (resp) {
+				if (chrome.runtime.lastError) {
+					dnSetDriveStatus('error', chrome.runtime.lastError.message);
+					return;
+				}
+				if (!resp || !resp.ok) {
+					dnSetDriveStatus('error', (resp && resp.error) || 'Sign-in failed');
+					return;
+				}
+				dnRefreshDriveConnected();
+			});
+		});
+		if (dnDriveDisconnectBtn) {
+			dnDriveDisconnectBtn.addEventListener('click', function () {
+				chrome.runtime.sendMessage({ action: 'dn:driveAuthRevoke' }, function () {
+					dnSetDriveStatus('success', 'Disconnected');
+					dnRefreshDriveConnected();
+				});
+			});
 		}
+		dnRefreshDriveConnected(true);
+	}
+
+	// Triggers an XLSX upload to Drive when autoUploadDrive is enabled. Bound
+	// to scrape:completed so it runs after data is final. We delay slightly
+	// to let popup.js' table render settle (s.data is mutated during the
+	// completion callback chain).
+	//
+	// We do NOT gate on payload.reason — even when the scrape ended with an
+	// error (target tab navigated away mid-crawl, sendMessage failure, etc.)
+	// the data already collected is still worth saving. dnBuildXlsxBase64
+	// returns null only when s.data is empty, which is the real "nothing to
+	// upload" signal.
+	function dnInitDriveAutoUpload() {
+		if (!window.dnBus) return;
+		window.dnBus.on('scrape:completed', function (payload) {
+			const toggle = document.getElementById('autoUploadDrive');
+			console.log('[drive] scrape:completed payload=', payload, 'toggle.checked=', toggle && toggle.checked);
+			if (!toggle || !toggle.checked) return;
+			if (typeof window.dnBuildXlsxBase64 !== 'function') {
+				console.warn('[drive] window.dnBuildXlsxBase64 not available — popup.js helpers missing');
+				return;
+			}
+			setTimeout(function () {
+				console.log('[drive] timeout fired, building xlsx…');
+				let base64;
+				try { base64 = window.dnBuildXlsxBase64(); }
+				catch (e) { console.error('[drive] dnBuildXlsxBase64 threw:', e); return; }
+				if (!base64) {
+					console.warn('[drive] no scraped data to upload (s.data empty)');
+					showScrapingNotification('Drive: no data to upload', 'warning');
+					return;
+				}
+				const filename = (typeof window.dnSuggestExportFilename === 'function')
+					? window.dnSuggestExportFilename('xlsx')
+					: ('dainn-export-' + Date.now() + '.xlsx');
+				console.log('[drive] uploading filename=', filename, 'size=', base64.length, 'b64chars');
+				showScrapingNotification('Uploading to Drive…', 'info');
+				chrome.runtime.sendMessage({
+					action: 'dn:driveUpload',
+					filename: filename,
+					mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+					bytesBase64: base64
+				}, function (resp) {
+					console.log('[drive] upload response:', resp, 'lastError=', chrome.runtime.lastError && chrome.runtime.lastError.message);
+					if (chrome.runtime.lastError || !resp || !resp.ok) {
+						const reason = (resp && resp.error) || (chrome.runtime.lastError && chrome.runtime.lastError.message) || 'unknown';
+						showScrapingNotification('Drive upload failed: ' + reason, 'error');
+						return;
+					}
+					showScrapingNotification('Uploaded to Drive (' + filename + ')', 'success');
+				});
+			}, 300);
+		});
 	}
 
 	function toggleAuthMethodSection() {
@@ -262,97 +404,66 @@
 
 	function updateSelectorSuggestions() {
 		const datalist = document.getElementById('selectorSuggestions');
-		const selectorsList = document.getElementById('selectorsList');
+		if (!datalist) return;
 		datalist.innerHTML = '';
-		const selectorItems = selectorsList.querySelectorAll('.flex.items-center.justify-between');
-		selectorItems.forEach(item => {
-			const selectorText = (item.querySelector('span') && item.querySelector('span').textContent) || (item.querySelector('input') && item.querySelector('input').value);
-			if (selectorText && selectorText.trim()) {
-				const option = document.createElement('option');
-				option.value = selectorText.trim();
-				datalist.appendChild(option);
-			}
+		readSelectorRows().forEach(value => {
+			const option = document.createElement('option');
+			option.value = value;
+			datalist.appendChild(option);
 		});
 	}
 
+	// Click handlers are now UI-only — show/hide buttons, update status badge.
+	// Crawl-history bookkeeping is driven by the dnBus lifecycle events
+	// emitted from popup.js so a single source of truth handles it (no more
+	// duplicate entries when both click handlers and popup.js fired together).
 	function handleStartScraping() {
-		// Show stop button, hide start button
 		startScrapingBtn.classList.add('hidden');
 		stopScrapingBtn.classList.remove('hidden');
-
-		// Update status badge to "Scraping..." and check next page existence
 		updateStatusBadge('scraping');
-		
-		// Check next page existence after a short delay
-		setTimeout(() => {
-			updateStatusBadgeWithNextPage();
-		}, 500);
-
-		// Get current URL - try different methods to get the page URL
-		let currentUrl = 'Unknown URL';
-		let pageTitle = 'Unknown Page';
-
-		// Try to get URL from Chrome tabs API if available
-		if (typeof chrome !== 'undefined' && chrome.tabs) {
-			chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
-				if (tabs[0]) {
-					currentUrl = tabs[0].url;
-					pageTitle = tabs[0].title || 'Unknown Page';
-				}
-
-				// Add crawl history item
-				currentCrawlId = addCrawlHistoryItem(currentUrl, pageTitle);
-				console.log('🚀 Started crawl session:', currentCrawlId);
-			});
-		} else {
-			// Fallback - try to get URL from window.location if available
-			try {
-				currentUrl = window.location.href;
-				pageTitle = document.title;
-			} catch (e) {
-				console.log('Could not get current URL, using fallback');
-			}
-
-			// Add crawl history item
-			currentCrawlId = addCrawlHistoryItem(currentUrl, pageTitle);
-			console.log('🚀 Started crawl session:', currentCrawlId);
-		}
-
-		// Show notification
-		showScrapingNotification('Scraping started - added to crawl history', 'info');
-
-		console.log('Start scraping clicked');
-		// Here you would integrate with the actual scraping functionality from popup.js
+		setTimeout(updateStatusBadgeWithNextPage, 500);
 	}
 
 	function handleStopScraping() {
-		// Show start button, hide stop button
 		stopScrapingBtn.classList.add('hidden');
 		startScrapingBtn.classList.remove('hidden');
-
-		// Update status badge to "Ready" and check next page existence
 		updateStatusBadge('ready');
-		
-		// Check next page existence after a short delay
-		setTimeout(() => {
-			updateStatusBadgeWithNextPage();
-		}, 500);
+		setTimeout(updateStatusBadgeWithNextPage, 500);
+	}
 
-		// Update crawl history item if we have a current crawl
-		if (currentCrawlId) {
+	// Owns the crawl-history side effects driven by dnBus lifecycle events.
+	// scrape:started → create entry; scrape:completed → update item count +
+	// status. Subscribed once at DOMContentLoaded; safe with the existing
+	// updateCrawlHistoryItem call in dnInitWebhookObservers because both
+	// resolve to the same record by id.
+	function dnInitCrawlHistoryBus() {
+		if (!window.dnBus) return;
+		window.dnBus.on('scrape:started', function (payload) {
+			let url = (payload && payload.startingUrl) || (window.s && window.s.startingUrl) || 'Unknown URL';
+			let title = 'Unknown Page';
+			if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.query) {
+				chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
+					if (tabs && tabs[0]) {
+						if (!payload || !payload.startingUrl) url = tabs[0].url;
+						title = tabs[0].title || title;
+					}
+					currentCrawlId = addCrawlHistoryItem(url, title);
+				});
+			} else {
+				currentCrawlId = addCrawlHistoryItem(url, title);
+			}
+		});
 
-			// Get item count from the stats or table data
-			let itemCount = getScrapedItemCount();
-			updateCrawlHistoryItem(currentCrawlId, itemCount, 'completed');
-			console.log('🏁 Completed crawl session:', currentCrawlId, 'with', itemCount, 'items');
-			currentCrawlId = null; // Reset current crawl ID
-		}
-
-		// Show notification
-		showScrapingNotification('Scraping stopped - history updated', 'warning');
-
-		console.log('Stop scraping clicked');
-		// Here you would integrate with the actual stop functionality from popup.js
+		window.dnBus.on('scrape:completed', function (payload) {
+			if (!currentCrawlId) return;
+			const total = (payload && payload.totalRows) || 0;
+			// Mark as 'error' only when truly nothing was captured. A run
+			// that scraped 300 rows then died on page N+1 still produced
+			// useful data — labelling that "error" hides the success.
+			const isFailedRun = total === 0 && payload && payload.reason === 'error';
+			updateCrawlHistoryItem(currentCrawlId, total, isFailedRun ? 'error' : 'completed');
+			currentCrawlId = null;
+		});
 	}
 
 	// Function to update status badge with next page information
@@ -991,7 +1102,7 @@
 			const payload = {
 				event: eventKey,
 				source: 'Dainn Scraper',
-				version: '0.1.1',
+				version: chrome.runtime.getManifest().version,
 				timestamp: new Date().toISOString(),
 				stats: dnCollectScrapeStats(),
 				data: extra || {}
@@ -1003,82 +1114,73 @@
 			);
 
 			console.log(`📡 Firing webhook [${eventKey}] →`, cfg.url);
-			fetch(cfg.url, {
+			// Route through the service worker so we bypass page-context CORS.
+			// Most webhook receivers (Discord, Slack, Zapier, Make, n8n, custom
+			// backends) don't ship CORS headers; fetching from the popup would
+			// have been blocked at preflight.
+			chrome.runtime.sendMessage({
+				action: 'dn:webhook',
+				url: cfg.url,
 				method: 'POST',
-				mode: 'cors',
 				headers: headers,
 				body: JSON.stringify(payload)
-			}).then(resp => {
-				if (resp.ok) {
-					console.log(`✅ Webhook [${eventKey}] delivered (HTTP ${resp.status})`);
-				} else {
-					console.warn(`⚠️ Webhook [${eventKey}] returned HTTP ${resp.status}`);
+			}, function (resp) {
+				if (chrome.runtime.lastError) {
+					console.warn(`❌ Webhook [${eventKey}] relay failed:`, chrome.runtime.lastError.message);
+					return;
 				}
-			}).catch(err => {
-				console.warn(`❌ Webhook [${eventKey}] failed:`, err && err.message);
+				if (resp && resp.ok) {
+					console.log(`✅ Webhook [${eventKey}] delivered (HTTP ${resp.status}) in ${resp.durationMs} ms`);
+				} else if (resp && resp.status) {
+					console.warn(`⚠️ Webhook [${eventKey}] returned HTTP ${resp.status}`);
+				} else {
+					console.warn(`❌ Webhook [${eventKey}] failed:`, resp && resp.error);
+				}
 			});
 		});
 	}
 	window.dnFireWebhook = dnFireWebhook;
 
 	// =====================================================
-	// DOM observers that translate UI state changes into webhook events.
-	// Decouples webhook dispatch from popup.js' minified scrape loop.
+	// Subscribes to dnBus lifecycle events emitted by popup.js and translates
+	// them into webhook deliveries. Previously this used MutationObservers on
+	// the Stop button's .hidden class and the page counter's text — that broke
+	// every time UI markup changed. dnBus is the single contract now.
 	// =====================================================
 	function dnInitWebhookObservers() {
-		const stopBtn   = document.getElementById('stopScraping');
-		const pagesStat = document.querySelector('.dn-stat .text-green-600');
-		const headerStatus = document.getElementById('dnHeaderStatus');
-		if (!stopBtn || !pagesStat) return;
+		if (!window.dnBus) {
+			console.warn('[webhook] dnBus not available — webhook events disabled');
+			return;
+		}
 
-		let scrapingActive = false;
-		let lastPageCount  = 0;
 		let errorReportedForRun = false;
 
-		// scraping_started / scraping_completed — derived from stopBtn visibility
-		new MutationObserver(() => {
-			const running = !stopBtn.classList.contains('hidden');
-			if (running && !scrapingActive) {
-				scrapingActive = true;
-				lastPageCount = parseInt(pagesStat.textContent || '0', 10) || 0;
-				errorReportedForRun = false;
-				dnFireWebhook('scraping_started');
-			} else if (!running && scrapingActive) {
-				scrapingActive = false;
-				dnFireWebhook('scraping_completed');
-				// Mark the current crawl complete in history so the sidebar
-				// stops showing "Crawling…" for runs that ended without an
-				// explicit Stop click (e.g. ran out of pages, popup closed).
-				if (typeof currentCrawlId !== 'undefined' && currentCrawlId
-					&& typeof updateCrawlHistoryItem === 'function') {
-					const items = (typeof getScrapedItemCount === 'function')
-						? getScrapedItemCount() : 0;
-					try { updateCrawlHistoryItem(currentCrawlId, items, 'completed'); } catch (e) {}
-					currentCrawlId = null;
-				}
-			}
-		}).observe(stopBtn, { attributes: true, attributeFilter: ['class'] });
+		window.dnBus.on('scrape:started', function () {
+			errorReportedForRun = false;
+			dnFireWebhook('scraping_started');
+		});
 
-		// page_completed — page counter incremented while scraping
-		new MutationObserver(() => {
-			if (!scrapingActive) return;
-			const newCount = parseInt(pagesStat.textContent || '0', 10) || 0;
-			if (newCount > lastPageCount) {
-				lastPageCount = newCount;
-				dnFireWebhook('page_completed', { pageNumber: newCount });
-			}
-		}).observe(pagesStat, { characterData: true, childList: true, subtree: true });
+		window.dnBus.on('scrape:page', function (payload) {
+			dnFireWebhook('page_completed', {
+				pageNumber: (payload && payload.pageNumber) || 0,
+				rowsThisPage: (payload && payload.rowsThisPage) || 0,
+				totalRows: (payload && payload.totalRows) || 0
+			});
+		});
 
-		// error_occurred — header badge enters is-error state (only fire once per run)
-		if (headerStatus) {
-			new MutationObserver(() => {
-				if (!scrapingActive || errorReportedForRun) return;
-				if (headerStatus.classList.contains('is-error')) {
-					errorReportedForRun = true;
-					dnFireWebhook('error_occurred', { message: headerStatus.textContent });
-				}
-			}).observe(headerStatus, { attributes: true, attributeFilter: ['class'] });
-		}
+		window.dnBus.on('scrape:error', function (payload) {
+			if (errorReportedForRun) return;
+			errorReportedForRun = true;
+			dnFireWebhook('error_occurred', {
+				message: (payload && payload.message) || ''
+			});
+		});
+
+		window.dnBus.on('scrape:completed', function (payload) {
+			dnFireWebhook('scraping_completed', payload || {});
+			// History close-out lives in dnInitCrawlHistoryBus — it also
+			// subscribes to scrape:completed and owns currentCrawlId.
+		});
 	}
 
 	function dnInitTestWebhook() {
@@ -1107,7 +1209,7 @@
 			const payload = {
 				event: 'test',
 				source: 'Dainn Scraper',
-				version: '0.1.1',
+				version: chrome.runtime.getManifest().version,
 				timestamp: new Date().toISOString(),
 				authMethod: authMethod,
 				message: 'This is a test ping from Dainn Scraper. If you can see this, your webhook is reachable.'
@@ -1120,16 +1222,33 @@
 
 			const startedAt = performance.now();
 			try {
-				const response = await fetch(url, {
-					method: 'POST',
-					mode: 'cors',
-					headers: Object.assign(
-						{ 'Content-Type': 'application/json' },
-						dnBuildAuthHeaders(authMethod, credentials)
-					),
-					body: JSON.stringify(payload)
+				// Same rationale as dnFireWebhook — relay through the SW so we
+				// don't get blocked by CORS preflight on user-supplied URLs.
+				const response = await new Promise(function (resolve, reject) {
+					chrome.runtime.sendMessage({
+						action: 'dn:webhook',
+						url: url,
+						method: 'POST',
+						headers: Object.assign(
+							{ 'Content-Type': 'application/json' },
+							dnBuildAuthHeaders(authMethod, credentials)
+						),
+						body: JSON.stringify(payload)
+					}, function (r) {
+						if (chrome.runtime.lastError) {
+							reject(new Error(chrome.runtime.lastError.message));
+							return;
+						}
+						if (!r) {
+							reject(new Error('No response from service worker'));
+							return;
+						}
+						if (r.ok) resolve(r);
+						else if (r.status) resolve(r); // HTTP error — surface status to user
+						else reject(new Error(r.error || 'Relay failed'));
+					});
 				});
-				const elapsed = Math.round(performance.now() - startedAt);
+				const elapsed = response.durationMs != null ? response.durationMs : Math.round(performance.now() - startedAt);
 				if (response.ok) {
 					dnSetTestWebhookFeedback('success', `Delivered (HTTP ${response.status}) in ${elapsed} ms`);
 				} else {
@@ -1663,136 +1782,103 @@
 		console.log('✅ Crawl history item updated successfully');
 	}
 
-	function saveCrawlToHistory(crawlData) {
-		console.log('💾 Saving crawl to Chrome storage:', crawlData);
+	// Crawl history persists to chrome.storage.local — NOT sync.
+	// chrome.storage.sync has a 100 KB total / 8 KB-per-item quota; with
+	// 50 entries containing long URLs we routinely blow it. .local has
+	// ~5 MB by default and is the correct storage for transient session
+	// records like this. Settings (scrapperSettings) stay in sync where
+	// cross-device propagation actually matters.
+	const HISTORY_KEY = 'crawlHistory';
+	const HISTORY_MAX_ITEMS = 50;
 
-		if (chrome && chrome.storage && chrome.storage.sync) {
-			// Save to Chrome storage for cross-device sync
-			chrome.storage.sync.get(['crawlHistory'], function (result) {
+	function withLocalHistory(mutator, done) {
+		if (chrome && chrome.storage && chrome.storage.local) {
+			chrome.storage.local.get([HISTORY_KEY], function (result) {
 				if (chrome.runtime.lastError) {
-					console.error('❌ Error reading from Chrome storage:', chrome.runtime.lastError);
-					// Fallback to localStorage
-					saveToLocalStorage(crawlData);
+					console.warn('history read failed:', chrome.runtime.lastError.message);
+					if (done) done(null);
 					return;
 				}
-
-				const existingHistory = result.crawlHistory || [];
-				existingHistory.unshift(crawlData); // Add to beginning
-
-				// Keep only last 50 items
-				const limitedHistory = existingHistory.slice(0, 50);
-
-				chrome.storage.sync.set({ 'crawlHistory': limitedHistory }, function () {
+				const current = Array.isArray(result[HISTORY_KEY]) ? result[HISTORY_KEY] : [];
+				const next = mutator(current.slice());
+				if (next === current) { if (done) done(current); return; }
+				const obj = {}; obj[HISTORY_KEY] = next;
+				chrome.storage.local.set(obj, function () {
 					if (chrome.runtime.lastError) {
-						console.error('❌ Error saving to Chrome storage:', chrome.runtime.lastError);
-						// Fallback to localStorage
-						saveToLocalStorage(crawlData);
-					} else {
-						console.log('✅ Crawl saved to Chrome storage successfully');
+						console.warn('history write failed:', chrome.runtime.lastError.message);
 					}
+					if (done) done(next);
 				});
 			});
-		} else {
-			// Fallback to localStorage if Chrome storage not available
-			saveToLocalStorage(crawlData);
+		} else if (typeof localStorage !== 'undefined') {
+			try {
+				const current = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+				const next = mutator(current.slice());
+				if (next !== current) localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+				if (done) done(next);
+			} catch (e) { console.warn('history localStorage failed:', e); if (done) done(null); }
 		}
 	}
 
-	function saveToLocalStorage(crawlData) {
-		if (typeof localStorage !== 'undefined') {
-			try {
-				const existingHistory = JSON.parse(localStorage.getItem('crawlHistory') || '[]');
-				existingHistory.unshift(crawlData); // Add to beginning
-
-				// Keep only last 50 items
-				const limitedHistory = existingHistory.slice(0, 50);
-				localStorage.setItem('crawlHistory', JSON.stringify(limitedHistory));
-
-				console.log('💾 Crawl saved to localStorage history (fallback)');
-			} catch (e) {
-				console.error('❌ Error saving crawl to localStorage:', e);
-			}
-		}
+	function saveCrawlToHistory(crawlData) {
+		withLocalHistory(function (history) {
+			history.unshift(crawlData);
+			return history.slice(0, HISTORY_MAX_ITEMS);
+		});
 	}
 
 	function updateCrawlInHistory(crawlId, updateData) {
-		console.log('💾 Updating crawl in Chrome storage:', crawlId, updateData);
-
-		if (chrome && chrome.storage && chrome.storage.sync) {
-			chrome.storage.sync.get(['crawlHistory'], function (result) {
-				if (chrome.runtime.lastError) {
-					console.error('❌ Error reading from Chrome storage:', chrome.runtime.lastError);
-					// Fallback to localStorage
-					updateInLocalStorage(crawlId, updateData);
-					return;
-				}
-
-				const existingHistory = result.crawlHistory || [];
-				const crawlIndex = existingHistory.findIndex(item => item.id === crawlId);
-
-				if (crawlIndex !== -1) {
-					existingHistory[crawlIndex] = { ...existingHistory[crawlIndex], ...updateData };
-
-					chrome.storage.sync.set({ 'crawlHistory': existingHistory }, function () {
-						if (chrome.runtime.lastError) {
-							console.error('❌ Error updating in Chrome storage:', chrome.runtime.lastError);
-							// Fallback to localStorage
-							updateInLocalStorage(crawlId, updateData);
-						} else {
-							console.log('✅ Crawl updated in Chrome storage successfully');
-						}
-					});
-				}
-			});
-		} else {
-			// Fallback to localStorage if Chrome storage not available
-			updateInLocalStorage(crawlId, updateData);
-		}
+		withLocalHistory(function (history) {
+			const idx = history.findIndex(item => item && item.id === crawlId);
+			if (idx === -1) return history;
+			history[idx] = Object.assign({}, history[idx], updateData);
+			return history;
+		});
 	}
 
-	function updateInLocalStorage(crawlId, updateData) {
-		if (typeof localStorage !== 'undefined') {
-			try {
-				const existingHistory = JSON.parse(localStorage.getItem('crawlHistory') || '[]');
-				const crawlIndex = existingHistory.findIndex(item => item.id === crawlId);
-
-				if (crawlIndex !== -1) {
-					existingHistory[crawlIndex] = { ...existingHistory[crawlIndex], ...updateData };
-					localStorage.setItem('crawlHistory', JSON.stringify(existingHistory));
-					console.log('💾 Crawl updated in localStorage history (fallback)');
-				}
-			} catch (e) {
-				console.error('❌ Error updating crawl in localStorage:', e);
-			}
+	// One-time migration: prior versions stored history in chrome.storage.sync
+	// (wrong quota). Move it to local once and clear the sync slot. Idempotent
+	// — guarded by a flag in local so it won't run twice and re-overwrite
+	// fresh local data with stale sync data.
+	function migrateHistoryFromSync(done) {
+		if (!(chrome && chrome.storage && chrome.storage.local && chrome.storage.sync)) {
+			if (done) done();
+			return;
 		}
+		chrome.storage.local.get(['crawlHistoryMigrated'], function (flag) {
+			if (flag && flag.crawlHistoryMigrated) { if (done) done(); return; }
+			chrome.storage.sync.get([HISTORY_KEY], function (syncResult) {
+				const syncHistory = (syncResult && Array.isArray(syncResult[HISTORY_KEY])) ? syncResult[HISTORY_KEY] : [];
+				if (!syncHistory.length) {
+					chrome.storage.local.set({ crawlHistoryMigrated: true }, function () { if (done) done(); });
+					return;
+				}
+				chrome.storage.local.get([HISTORY_KEY], function (localResult) {
+					const localHistory = (localResult && Array.isArray(localResult[HISTORY_KEY])) ? localResult[HISTORY_KEY] : [];
+					// Merge by id, prefer local (fresher) entries on conflict.
+					const seen = new Set(localHistory.map(it => it && it.id));
+					const merged = localHistory.concat(syncHistory.filter(it => it && !seen.has(it.id))).slice(0, HISTORY_MAX_ITEMS);
+					const writePayload = {}; writePayload[HISTORY_KEY] = merged; writePayload.crawlHistoryMigrated = true;
+					chrome.storage.local.set(writePayload, function () {
+						chrome.storage.sync.remove([HISTORY_KEY], function () { if (done) done(); });
+					});
+				});
+			});
+		});
 	}
 
 	function loadCrawlHistory() {
-		console.log('📖 Loading crawl history from Chrome storage');
-
-		if (chrome && chrome.storage && chrome.storage.sync) {
-			// Load from Chrome storage for cross-device sync
-			chrome.storage.sync.get(['crawlHistory'], function (result) {
-				if (chrome.runtime.lastError) {
-					console.error('❌ Error reading from Chrome storage:', chrome.runtime.lastError);
-					// Fallback to localStorage
-					loadFromLocalStorage();
-					return;
-				}
-
-				const historyData = sweepStaleCrawling(result.crawlHistory || []);
-				renderCrawlHistory(historyData);
-				console.log('✅ Crawl history loaded from Chrome storage:', historyData.length, 'items');
-			});
-		} else {
-			// Fallback to localStorage if Chrome storage not available
-			loadFromLocalStorage();
-		}
+		withLocalHistory(function (history) {
+			const swept = sweepStaleCrawling(history);
+			return swept;
+		}, function (history) {
+			renderCrawlHistory(history || []);
+		});
 	}
 
-	// Mark any history item that's still 'crawling' as 'completed' — they
-	// came from a prior session that ended without an explicit Stop click,
-	// so the stale status is misleading in the sidebar. The active run owns
+	// Mark any history item that's still 'crawling' as 'completed' — they came
+	// from a prior session that ended without an explicit Stop click, so the
+	// stale status would be misleading in the sidebar. The active run owns
 	// currentCrawlId and won't appear in storage yet at load time.
 	function sweepStaleCrawling(items) {
 		if (!Array.isArray(items) || !items.length) return items;
@@ -1804,52 +1890,20 @@
 			}
 			return it;
 		});
-		if (changed && chrome && chrome.storage && chrome.storage.sync) {
-			chrome.storage.sync.set({ crawlHistory: swept });
-		}
-		return swept;
-	}
-
-	function loadFromLocalStorage() {
-		console.log('📖 Loading crawl history from localStorage (fallback)');
-
-		if (typeof localStorage === 'undefined') {
-			console.log('📖 localStorage not available, skipping history load');
-			return;
-		}
-
-		try {
-			const raw = JSON.parse(localStorage.getItem('crawlHistory') || '[]');
-			const historyData = sweepStaleCrawling(raw);
-			if (historyData !== raw) {
-				localStorage.setItem('crawlHistory', JSON.stringify(historyData));
-			}
-			renderCrawlHistory(historyData);
-			console.log('✅ Crawl history loaded from localStorage:', historyData.length, 'items');
-		} catch (e) {
-			console.error('❌ Error loading crawl history from localStorage:', e);
-		}
+		return changed ? swept : items;
 	}
 
 	function renderCrawlHistory(historyData) {
 		const historyContainer = document.querySelector('#crawlHistoryContainer');
+		const emptyState = document.getElementById('dnHistoryEmpty');
 
-		if (!historyContainer) {
-			console.error('❌ History container not found');
-			return;
-		}
+		if (!historyContainer) return;
 
-		console.log('🔄 Rendering crawl history with', historyData.length, 'items');
+		historyContainer.innerHTML = '';
 
-		// Clear ALL existing items (both static and dynamic)
-		const allItems = historyContainer.querySelectorAll('div');
-		allItems.forEach(item => item.remove());
-
-		// If no history data, don't add any items
-		if (!historyData || historyData.length === 0) {
-			console.log('📭 No crawl history data to display');
-			return;
-		}
+		const hasItems = Array.isArray(historyData) && historyData.length > 0;
+		if (emptyState) emptyState.classList.toggle('hidden', hasItems);
+		if (!hasItems) return;
 
 		// Add items from storage
 		historyData.slice(0, 10).forEach(crawlData => { // Show only last 10
@@ -2123,20 +2177,9 @@
 			autoDownloadCSV: document.getElementById('autoDownloadCSV')?.checked || false,
 			autoUploadDrive: document.getElementById('autoUploadDrive')?.checked || false,
 
-			// Authentication Method
-			authMethod: document.querySelector('input[name="authMethod"]:checked')?.value || 'oauth',
-
-			// OAuth 2.0 Credentials
-			oauth: {
-				clientId: document.querySelector('#oauthFields input[placeholder*="Client ID"]')?.value || '',
-				clientSecret: document.querySelector('#oauthFields input[placeholder*="Client Secret"]')?.value || ''
-			},
-
-			// Service Account Credentials
-			serviceAccount: {
-				email: document.querySelector('#serviceFields input[type="email"]')?.value || '',
-				privateKeyFile: document.getElementById('fileName')?.textContent || 'No file chosen'
-			},
+			// Drive auth is owned by chrome.identity — no user-entered
+			// credentials to persist here. (Legacy oauth/serviceAccount fields
+			// retired alongside the Service-account UI removal.)
 
 			// Webhook Settings
 			webhooks: {
@@ -2152,72 +2195,26 @@
 		};
 
 		// Collect next page selectors
-		const selectorItems = document.querySelectorAll('#selectorsList .flex.items-center.justify-between');
-		console.log('🔍 DEBUG: Found selector items:', selectorItems.length);
-		selectorItems.forEach(item => {
-			const selectorText = item.querySelector('span')?.textContent;
-			if (selectorText && selectorText.trim()) {
-				settings.nextPageSelectors.push(selectorText.trim());
-			}
-		});
+		settings.nextPageSelectors = readSelectorRows();
 
-		console.log('🔍 DEBUG: Settings object to save:', settings);
-		console.log('🔍 DEBUG: Settings JSON size:', JSON.stringify(settings).length, 'bytes');
-
-		// Check if we're in extension context
 		if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-			console.log('🔍 DEBUG: Chrome storage API is available');
-
-			// Test Chrome storage with a simple value first
-			chrome.storage.sync.set({ 'testKey': 'testValue' }, function () {
+			chrome.storage.sync.set({ scrapperSettings: settings }, function () {
 				if (chrome.runtime.lastError) {
-					console.error('🔍 DEBUG: Test storage failed:', chrome.runtime.lastError);
-					alert('❌ Chrome storage test failed: ' + chrome.runtime.lastError.message);
+					console.error('Error saving settings:', chrome.runtime.lastError);
+					showScrapingNotification('Error saving settings: ' + chrome.runtime.lastError.message, 'error');
 					return;
 				}
-
-				console.log('🔍 DEBUG: Test storage successful, proceeding with settings save');
-
-				// Now save the actual settings
-				chrome.storage.sync.set({ 'scrapperSettings': settings }, function () {
-					if (chrome.runtime.lastError) {
-						console.error('❌ Error saving settings:', chrome.runtime.lastError);
-						console.error('🔍 DEBUG: Full error object:', chrome.runtime.lastError);
-						alert('❌ Error saving settings: ' + chrome.runtime.lastError.message);
-						showScrapingNotification('Error saving settings: ' + chrome.runtime.lastError.message, 'error');
-					} else {
-						console.log('✅ Settings saved successfully to Chrome storage:', settings);
-
-						// Verify the save by reading it back
-						chrome.storage.sync.get(['scrapperSettings'], function (result) {
-							console.log('🔍 DEBUG: Verification read result:', result);
-							if (result.scrapperSettings) {
-								console.log('✅ Settings verified successfully');
-								alert('✅ Settings saved successfully!\n\nYour configuration has been saved to Chrome storage and will sync across devices.');
-								showScrapingNotification('Settings saved successfully!', 'success');
-							} else {
-								console.error('❌ Settings verification failed - could not read back');
-								alert('⚠️ Settings may not have saved correctly. Please try again.');
-							}
-						});
-					}
-				});
+				console.log('Settings saved:', settings);
+				showScrapingNotification('Settings saved', 'success');
 			});
 		} else {
-			console.log('⚠️ Chrome storage not available, using localStorage fallback');
-			console.log('🔍 DEBUG: chrome object exists:', typeof chrome !== 'undefined');
-			console.log('🔍 DEBUG: chrome.storage exists:', typeof chrome?.storage !== 'undefined');
-			console.log('🔍 DEBUG: chrome.storage.sync exists:', typeof chrome?.storage?.sync !== 'undefined');
-
-			// Fallback to localStorage if Chrome storage not available
+			// Fallback to localStorage when running outside a Chrome extension context
 			try {
 				localStorage.setItem('scrapperSettings', JSON.stringify(settings));
-				console.log('✅ Settings saved to localStorage:', settings);
-				alert('✅ Settings saved to local storage!\n\nNote: Chrome storage not available, using local storage instead.');
-				showScrapingNotification('Settings saved to local storage!', 'success');
+				showScrapingNotification('Settings saved to local storage', 'success');
 			} catch (error) {
-				console.error('❌ Error saving to localStorage:', error);
-				alert('❌ Error saving to local storage: ' + error.message);
+				console.error('Error saving to localStorage:', error);
+				showScrapingNotification('Error saving settings: ' + error.message, 'error');
 			}
 		}
 	}
@@ -2287,30 +2284,10 @@
 			}
 		}
 
-		// Authentication Method
-		if (settings.authMethod) {
-			const authRadio = document.querySelector(`input[name="authMethod"][value="${settings.authMethod}"]`);
-			if (authRadio) {
-				authRadio.checked = true;
-				switchAuthMethod(); // Trigger field visibility
-			}
-		}
-
-		// OAuth Credentials
-		if (settings.oauth) {
-			const clientIdInput = document.querySelector('#oauthFields input[placeholder*="Client ID"]');
-			const clientSecretInput = document.querySelector('#oauthFields input[placeholder*="Client Secret"]');
-			if (clientIdInput) clientIdInput.value = settings.oauth.clientId || '';
-			if (clientSecretInput) clientSecretInput.value = settings.oauth.clientSecret || '';
-		}
-
-		// Service Account Credentials
-		if (settings.serviceAccount) {
-			const emailInput = document.querySelector('#serviceFields input[type="email"]');
-			const fileNameSpan = document.getElementById('fileName');
-			if (emailInput) emailInput.value = settings.serviceAccount.email || '';
-			if (fileNameSpan) fileNameSpan.textContent = settings.serviceAccount.privateKeyFile || 'No file chosen';
-		}
+		// settings.authMethod / settings.oauth / settings.serviceAccount were
+		// retired when the auth UI moved to chrome.identity. Old payloads in
+		// storage are ignored harmlessly — they just get overwritten on next
+		// save without those fields.
 
 		// Webhook Settings
 		if (settings.webhooks) {
@@ -2364,26 +2341,16 @@
 			}
 		}
 
-		// Next Page Selectors
-		if (settings.nextPageSelectors && settings.nextPageSelectors.length > 0) {
+		// Next Page Selectors — replace whatever defaults are in the DOM with
+		// the user's saved list. Use buildSelectorRow so the saved entries
+		// keep the same markup/styling as freshly-added ones.
+		if (settings.nextPageSelectors && Array.isArray(settings.nextPageSelectors)) {
 			const selectorsList = document.getElementById('selectorsList');
 			if (selectorsList) {
-				// Clear existing selectors (except default ones)
 				selectorsList.innerHTML = '';
-
-				// Add saved selectors
-				settings.nextPageSelectors.forEach(selector => {
-					const selectorDiv = document.createElement('div');
-					selectorDiv.className = 'flex items-center justify-between p-3 bg-gray-50 rounded-lg';
-					selectorDiv.innerHTML = `
-						<span class="text-blue-600 font-mono text-sm">${selector}</span>
-						<button class="text-gray-400 hover:text-red-500">
-							<i class="fas fa-trash"></i>
-						</button>
-					`;
-					selectorsList.appendChild(selectorDiv);
+				settings.nextPageSelectors.forEach(value => {
+					selectorsList.appendChild(buildSelectorRow(value));
 				});
-
 				updateSelectorSuggestions();
 			}
 		}
@@ -2422,15 +2389,6 @@
 		if (autoDownloadCSV) autoDownloadCSV.checked = false;
 		if (autoUploadDrive) autoUploadDrive.checked = false;
 
-		// Reset authentication method to OAuth
-		const oauthRadio = document.getElementById('oauthRadio');
-		if (oauthRadio) oauthRadio.checked = true;
-
-		// Clear form fields
-		document.querySelectorAll('#oauthFields input, #serviceFields input').forEach(input => {
-			input.value = '';
-		});
-
 		// Reset webhook settings — OFF by default
 		const enableWebhooks = document.getElementById('enableWebhooks');
 		if (enableWebhooks) enableWebhooks.checked = false;
@@ -2468,20 +2426,12 @@
 		// Reset selectors list to defaults
 		const selectorsList = document.getElementById('selectorsList');
 		if (selectorsList) {
-			selectorsList.innerHTML = `
-				<div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-					<span class="text-blue-600 font-mono text-sm">a[title='Next Page']</span>
-					<button class="text-gray-400 hover:text-red-500">
-						<i class="fas fa-trash"></i>
-					</button>
-				</div>
-				<div class="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-					<span class="text-blue-600 font-mono text-sm">button[rel='next']</span>
-					<button class="text-gray-400 hover:text-red-500">
-						<i class="fas fa-trash"></i>
-					</button>
-				</div>
-			`;
+			selectorsList.innerHTML = '';
+			["a[title='Next Page']", "button[rel='next']"].forEach(value => {
+				const row = buildSelectorRow(value);
+				row.setAttribute('data-default', 'true');
+				selectorsList.appendChild(row);
+			});
 		}
 
 		// Trigger visibility logic
@@ -2500,8 +2450,7 @@
 	if (cancelSettings) cancelSettings.addEventListener('click', closeSettingsModal);
 	if (settingsOverlay) settingsOverlay.addEventListener('click', closeSettingsModal);
 	if (addSelector) addSelector.addEventListener('click', addNewSelector);
-	if (oauthRadio) oauthRadio.addEventListener('change', switchAuthMethod);
-	if (serviceRadio) serviceRadio.addEventListener('change', switchAuthMethod);
+	// (auth-method radios removed — service-account flow retired)
 	if (paginationNone) paginationNone.addEventListener('change', function() {
 		toggleCSSSelector();
 		// Check next page existence after pagination type change
@@ -2523,12 +2472,7 @@
 			updateStatusBadgeWithNextPage();
 		}, 300);
 	});
-	if (privateKeyFile && fileName) {
-		privateKeyFile.addEventListener('change', function (e) {
-			const file = e.target.files[0];
-			fileName.textContent = file ? file.name : 'No file chosen';
-		});
-	}
+	// (private-key file picker removed alongside service-account flow)
 	if (saveSettings) {
 		saveSettings.addEventListener('click', function () {
 			// Show loading state
@@ -2556,37 +2500,37 @@
 			resetAllSettings();
 		});
 	}
+	// Single delegated click handler — earlier code had two near-identical
+	// listeners trying to dedupe themselves with overlapping conditions,
+	// which is exactly the redundancy a delegated handler is meant to avoid.
 	document.addEventListener('click', function (e) {
-		console.log('🔍 Click event detected:', e.target);
-
-		// Handle crawl history remove button clicks (fallback method)
-		if (e.target.classList.contains('fa-times') || e.target.classList.contains('crawl-history-remove')) {
-			const removeButton = e.target.closest('.crawl-history-remove');
-			if (removeButton) {
-				console.log('✅ Remove button clicked via event listener!');
-				const historyItem = removeButton.closest('.p-3.bg-gray-50.rounded-lg');
-
-				if (historyItem) {
-					const crawlId = historyItem.getAttribute('data-crawl-id');
-					console.log('🔍 Crawl ID from event listener:', crawlId);
-
-					if (crawlId) {
-						console.log('🗑️ Removing crawl from history via event listener:', crawlId);
-						removeCrawlFromHistory(crawlId);
-						historyItem.remove();
-						console.log('✅ History item removed from DOM via event listener');
-
-						// Show success notification
-						showScrapingNotification('Crawl history item removed', 'success');
+		// Crawl-history remove
+		const historyRemoveBtn = e.target.closest('.crawl-history-remove');
+		if (historyRemoveBtn) {
+			const historyItem = historyRemoveBtn.closest('[data-crawl-id]');
+			if (historyItem) {
+				const crawlId = historyItem.getAttribute('data-crawl-id');
+				if (crawlId) {
+					removeCrawlFromHistory(crawlId);
+					historyItem.remove();
+					// Toggle empty state if this was the last row.
+					const container = document.getElementById('crawlHistoryContainer');
+					const emptyState = document.getElementById('dnHistoryEmpty');
+					if (container && emptyState && !container.querySelector('[data-crawl-id]')) {
+						emptyState.classList.remove('hidden');
 					}
+					showScrapingNotification('Crawl history item removed', 'success');
 				}
 			}
+			return;
 		}
 
-		// Handle selector removal (existing functionality)
-		if (e.target.classList.contains('fa-trash') || (e.target.closest('button') && e.target.closest('button').querySelector('.fa-trash'))) {
-			const selectorItem = e.target.closest('.flex.items-center.justify-between');
-			if (selectorItem && selectorItem.parentElement.id === 'selectorsList') {
+		// Selectors-tab remove — scoped to its dedicated class so we don't
+		// swallow trash clicks elsewhere in the modal.
+		const selectorRemoveBtn = e.target.closest('.dn-selector-remove');
+		if (selectorRemoveBtn) {
+			const selectorItem = selectorRemoveBtn.closest('.dn-selector-row');
+			if (selectorItem && selectorItem.parentElement && selectorItem.parentElement.id === 'selectorsList') {
 				selectorItem.remove();
 				updateSelectorSuggestions();
 			}
@@ -2598,34 +2542,6 @@
 				closeSettingsModal();
 			} else if (sidebarMenu && !sidebarMenu.classList.contains('-translate-x-full')) {
 				closeSidebarMenu();
-			}
-		}
-	});
-	document.addEventListener('click', function (e) {
-		console.log('🔍 Click event detected:', e.target);
-		console.log('🔍 Target classes:', e.target.classList);
-		console.log('🔍 Closest remove button:', e.target.closest('.crawl-history-remove'));
-
-		// Check if click is on the remove button or its icon
-		const removeButton = e.target.closest('.crawl-history-remove');
-		const isIconClick = e.target.classList.contains('fa-times');
-		const isButtonClick = e.target.classList.contains('crawl-history-remove');
-
-		if ((isIconClick || isButtonClick) && removeButton) {
-			console.log('✅ Remove button clicked!');
-			const historyItem = e.target.closest('.p-3.bg-gray-50.rounded-lg');
-			console.log('🔍 History item found:', historyItem);
-
-			if (historyItem) {
-				const crawlId = historyItem.getAttribute('data-crawl-id');
-				console.log('🔍 Crawl ID:', crawlId);
-
-				if (crawlId) {
-					console.log('🗑️ Removing crawl from history:', crawlId);
-					removeCrawlFromHistory(crawlId);
-				}
-				historyItem.remove();
-				console.log('✅ History item removed from DOM');
 			}
 		}
 	});
@@ -2820,17 +2736,11 @@
 	function setupChromeStorageListener() {
 		if (chrome && chrome.storage && chrome.storage.onChanged) {
 			chrome.storage.onChanged.addListener(function (changes, namespace) {
-				if (namespace === 'sync' && changes.crawlHistory) {
-					console.log('🔄 Crawl history changed in Chrome storage, updating UI...');
-
-					// Reload the history to show the latest changes
+				// Crawl history now lives in .local; settings still sync.
+				if (namespace === 'local' && changes[HISTORY_KEY]) {
 					loadCrawlHistory();
-
-					// Show notification about sync
-					showScrapingNotification('Crawl history synced from another extension', 'info');
 				}
 			});
-			console.log('✅ Chrome storage change listener set up');
 		}
 	}
 
@@ -2849,53 +2759,12 @@
 		}
 	}
 
-	// Function to remove crawl from history (moved to global scope)
 	function removeCrawlFromHistory(crawlId) {
-		console.log('🗑️ Removing crawl from history:', crawlId);
-
-		if (chrome && chrome.storage && chrome.storage.sync) {
-			chrome.storage.sync.get(['crawlHistory'], function (result) {
-				if (chrome.runtime.lastError) {
-					console.error('❌ Error reading from Chrome storage:', chrome.runtime.lastError);
-					// Fallback to localStorage
-					removeFromLocalStorage(crawlId);
-					return;
-				}
-
-				const existingHistory = result.crawlHistory || [];
-				const filteredHistory = existingHistory.filter(item => item.id !== crawlId);
-
-				chrome.storage.sync.set({ 'crawlHistory': filteredHistory }, function () {
-					if (chrome.runtime.lastError) {
-						console.error('❌ Error removing from Chrome storage:', chrome.runtime.lastError);
-						// Fallback to localStorage
-						removeFromLocalStorage(crawlId);
-					} else {
-						console.log('✅ Crawl removed from Chrome storage successfully');
-					}
-				});
-			});
-		} else {
-			// Fallback to localStorage if Chrome storage not available
-			removeFromLocalStorage(crawlId);
-		}
+		withLocalHistory(function (history) {
+			return history.filter(item => item && item.id !== crawlId);
+		});
 	}
-
-	// Make function globally accessible
 	window.removeCrawlFromHistory = removeCrawlFromHistory;
-
-	function removeFromLocalStorage(crawlId) {
-		if (typeof localStorage !== 'undefined') {
-			try {
-				const existingHistory = JSON.parse(localStorage.getItem('crawlHistory') || '[]');
-				const filteredHistory = existingHistory.filter(item => item.id !== crawlId);
-				localStorage.setItem('crawlHistory', JSON.stringify(filteredHistory));
-				console.log('🗑️ Crawl removed from localStorage history (fallback)');
-			} catch (e) {
-				console.error('❌ Error removing crawl from localStorage:', e);
-			}
-		}
-	}
 
 	document.addEventListener('DOMContentLoaded', function () {
 		updateSelectorSuggestions();
@@ -2923,9 +2792,13 @@
 		dnInitTestWebhook();
 		dnInitWebhookAuthFields();
 		dnInitWebhookObservers();
+		dnInitCrawlHistoryBus();
+		dnInitDriveAuth();
+		dnInitDriveAutoUpload();
 
-		// Load crawl history
-		loadCrawlHistory();
+		// One-time move from chrome.storage.sync → .local for crawl history,
+		// then load. Wrapped so the migration callback fires before render.
+		migrateHistoryFromSync(loadCrawlHistory);
 
 		// Setup Chrome storage change listener for cross-extension sync
 		setupChromeStorageListener();

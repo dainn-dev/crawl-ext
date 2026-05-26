@@ -1,3 +1,9 @@
 Instant Data Scraper/node_modules/
 Dainn Scraper/node_modules/
 Instant Data Scraper/package-lock.json
+
+# Chrome extension signing key — never commit
+*.pem
+
+# Packed extension binary — build artifact, don't track
+*.crx

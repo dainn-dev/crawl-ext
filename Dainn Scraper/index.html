@@ -74,15 +74,15 @@
                         </button>
                     </div>
                     <div id="selectorsList" class="dn-selector-list">
-                        <div class="dn-selector-row">
+                        <div class="dn-selector-row" data-default="true">
                             <span class="dn-selector-code">a[title='Next Page']</span>
-                            <button class="dn-icon-btn dn-icon-btn-danger" title="Remove">
+                            <button class="dn-icon-btn dn-icon-btn-danger dn-selector-remove" title="Remove" type="button">
                                 <i class="fas fa-trash"></i>
                             </button>
                         </div>
-                        <div class="dn-selector-row">
+                        <div class="dn-selector-row" data-default="true">
                             <span class="dn-selector-code">button[rel='next']</span>
-                            <button class="dn-icon-btn dn-icon-btn-danger" title="Remove">
+                            <button class="dn-icon-btn dn-icon-btn-danger dn-selector-remove" title="Remove" type="button">
                                 <i class="fas fa-trash"></i>
                             </button>
                         </div>
@@ -106,7 +106,7 @@
                         <div class="dn-toggle-row">
                             <div class="dn-toggle-text">
                                 <div class="dn-toggle-title">Auto-upload to Google Drive</div>
-                                <div class="dn-toggle-desc">Upload the XLSX file to Drive using the credentials below.</div>
+                                <div class="dn-toggle-desc">Upload an XLSX of the results to Drive when the crawl finishes.</div>
                             </div>
                             <label class="dn-switch">
                                 <input type="checkbox" id="autoUploadDrive">
@@ -116,44 +116,16 @@
                     </div>
 
                     <div id="authMethodSection" class="dn-modal-section dn-modal-section-sub hidden">
-                        <h4 class="dn-modal-subsection-title"><i class="fas fa-key"></i> Drive authentication</h4>
-                        <div class="dn-radio-pills">
-                            <label class="dn-radio-pill">
-                                <input type="radio" name="authMethod" value="oauth" checked id="oauthRadio">
-                                <span>OAuth 2.0</span>
-                            </label>
-                            <label class="dn-radio-pill">
-                                <input type="radio" name="authMethod" value="service" id="serviceRadio">
-                                <span>Service account</span>
-                            </label>
-                        </div>
-
-                        <div id="oauthFields" class="dn-form-grid">
-                            <div class="dn-field">
-                                <label class="dn-modal-label">Client ID</label>
-                                <input type="text" placeholder="123456789-abcdef.apps.googleusercontent.com" class="dn-input">
-                            </div>
-                            <div class="dn-field">
-                                <label class="dn-modal-label">Client secret</label>
-                                <input type="password" placeholder="••••••••••••••••" class="dn-input">
-                            </div>
-                        </div>
-
-                        <div id="serviceFields" class="dn-form-grid hidden">
-                            <div class="dn-field">
-                                <label class="dn-modal-label">Service account email</label>
-                                <input type="email" placeholder="service-account@project.iam.gserviceaccount.com" class="dn-input">
-                            </div>
-                            <div class="dn-field">
-                                <label class="dn-modal-label">Private key (.json)</label>
-                                <div class="dn-file-input">
-                                    <input type="file" accept=".json" id="privateKeyFile">
-                                    <div class="dn-file-input-face">
-                                        <span id="fileLabel"><i class="fas fa-folder-open"></i> Choose file</span>
-                                        <span id="fileName" class="dn-file-name">No file chosen</span>
-                                    </div>
-                                </div>
-                            </div>
+                        <h4 class="dn-modal-subsection-title"><i class="fas fa-key"></i> Drive connection</h4>
+                        <p class="dn-modal-section-desc" style="margin-top:0;">Click <b>Connect</b> to sign in with any Google account. The extension only sees files it creates (<code>drive.file</code> scope). No Chrome browser sign-in required.</p>
+                        <div class="dn-test-webhook-row">
+                            <button id="dnDriveConnect" class="dn-btn dn-btn-secondary" type="button">
+                                <i class="fab fa-google"></i> Connect to Drive
+                            </button>
+                            <button id="dnDriveDisconnect" class="dn-btn dn-btn-ghost hidden" type="button">
+                                <i class="fas fa-link-slash"></i> Disconnect
+                            </button>
+                            <div id="dnDriveStatus" class="dn-test-webhook-feedback hidden"></div>
                         </div>
                     </div>
                 </section>
@@ -326,7 +298,7 @@
                 <span>About & feedback</span>
                 <i class="fas fa-arrow-up-right-from-square dn-sidebar-action-chev"></i>
             </a>
-            <div class="dn-sidebar-version">v0.1.1</div>
+            <div class="dn-sidebar-version">v0.1.7</div>
         </footer>
     </aside>
 
@@ -429,6 +401,25 @@
                         </div>
                     </div>
                     <div id="recentPicks" class="hidden"></div>
+                </div>
+            </div>
+
+            <div class="dn-card">
+                <h3 class="dn-card-title"><i class="fas fa-vector-square"></i> Content to scrape</h3>
+                <p class="dn-step-desc" style="margin-bottom:14px;">Dainn auto-detects the main table. If it picked the wrong area, override it by entering a selector or clicking the element on the page.</p>
+                <div class="dn-selector-block" style="margin-top:0;">
+                    <div class="dn-field">
+                        <label class="dn-label">Content selector</label>
+                        <div class="dn-selector-input-row">
+                            <input type="text"
+                                   placeholder='e.g. table.products, .results-list, #items'
+                                   id="contentSelectorInput"
+                                   class="dn-input dn-input-mono">
+                            <button id='applyContentSelector' class="dn-btn dn-btn-secondary dn-selector-apply-btn">
+                                <i class="fas fa-crosshairs"></i> Use selector
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -597,6 +588,7 @@
         </div>
     </main>
 
+    <script src="js/dn-bus.js"></script>
     <script src="js/index-page.js"></script>
     <script src="js/papaparse.min.js"></script>
     <script src="js/jquery-3.1.1.min.js"></script>

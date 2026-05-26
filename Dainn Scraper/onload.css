@@ -32,6 +32,15 @@
     gap: 12px !important;
     line-height: 1.4 !important;
 }
+/* Content-picker variant — teal so users immediately see this is a different
+   mode than the orange Next-page picker. */
+.tablescraper-picker-banner.is-content {
+    background: linear-gradient(90deg, #0ea5e9, #14b8a6) !important;
+}
+.tablescraper-picker-badge.is-content {
+    background: #0f766e !important;
+    color: #ecfeff !important;
+}
 .tablescraper-picker-banner .tps-msg {
     flex: 0 0 auto !important;
 }
